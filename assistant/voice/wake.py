@@ -63,6 +63,29 @@ class WakePipeline:
         t = self._wake_re().sub("", t, count=1)
         return re.sub(r"^[\s,.:;!\-]+", "", t).strip()
 
+    def wake_at_start(self, text: str) -> bool:
+        """True only if transcript is essentially Jarvis / Hey Jarvis near the start.
+
+        Voice UI: do not open Listening on VAD alone or mid-sentence name drops.
+        """
+        t = (text or "").strip()
+        if not t:
+            return False
+        # Must begin with optional hey/ok + wake name (ignore leading punctuation)
+        t = re.sub(r"^[\s,.:;!\-]+", "", t)
+        name = re.escape(self.config.wake_name.strip())
+        return bool(
+            re.match(
+                rf"^(?:(?:hey|ok|okay)\s+)?{name}\b",
+                t,
+                re.I,
+            )
+        )
+
+    def is_wake_only_or_wake_plus_command(self, text: str) -> bool:
+        """Accept wake-gated STT if name leads; leftover may be the command."""
+        return self.wake_at_start(text)
+
     def set_muted(self, muted: bool) -> WakePhase:
         self.muted = muted
         if muted:
@@ -101,7 +124,8 @@ class WakePipeline:
         if confidence < self.config.wake_confidence_min:
             self.false_wakes += 1
             return False
-        if not text or not self._wake_re().search(text):
+        if not text or not self.wake_at_start(text):
+            self.false_wakes += 1
             return False
         if self.phase == WakePhase.BUSY and not barge_in:
             return False

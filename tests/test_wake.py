@@ -73,3 +73,22 @@ def test_busy_blocks_wake_unless_barge_in():
     p.set_busy(True)
     assert p.try_wake("Jarvis x", confidence=1.0) is False
     assert p.try_wake("Jarvis x", confidence=1.0, barge_in=True) is True
+
+
+def test_wake_must_be_at_start():
+    p = WakePipeline(config=WakeConfig(wake_name="Jarvis"))
+    assert p.wake_at_start("Jarvis")
+    assert p.wake_at_start("Hey Jarvis")
+    assert p.wake_at_start("Jarvis open calculator")
+    assert not p.wake_at_start("please Jarvis help")
+    assert not p.wake_at_start("open calculator")
+    assert p.try_wake("please Jarvis help", confidence=1.0) is False
+    assert p.phase == WakePhase.IDLE_ARMED
+
+
+def test_vad_alone_never_opens_listening():
+    p = WakePipeline()
+    assert p.phase == WakePhase.IDLE_ARMED
+    # energy while idle must not change phase
+    assert p.feed_energy(0.9, 0.1) is None
+    assert p.phase == WakePhase.IDLE_ARMED

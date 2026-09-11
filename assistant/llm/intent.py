@@ -8,6 +8,7 @@ IntentKind = Literal[
     "teach",
     "recall",
     "forget",
+    "list_skills",
     "open_app",
     "open_url",
     "list_files",
@@ -28,13 +29,24 @@ class Intent:
     reply: str | None = None
 
 
+_SKILL_CMD = re.compile(
+    r"^\s*(?:learn|remember|teach(?:\s+me)?|next time)\s+"
+    r"(?:when\s+i\s+say|if\s+i\s+say|i\s+say)\s+"
+    r"['\"]?(.+?)['\"]?\s*[,:]?\s*(?:do|then)\s+(.+)$",
+    re.I | re.S,
+)
 _TEACH = re.compile(
-    r"^\s*(?:remember(?:\s+that)?|teach(?:\s+me)?)\s+(.+)$", re.I | re.S
+    r"^\s*(?:remember(?:\s+that)?|teach(?:\s+me)?|learn(?:\s+that)?|next time(?:\s+that)?|if I say)\s+(.+)$",
+    re.I | re.S,
 )
 _RECALL = re.compile(
     r"^\s*(?:what(?:'s| is)|recall|do you remember)\s+(.+?)\??\s*$", re.I
 )
 _FORGET = re.compile(r"^\s*forget\s+(.+)$", re.I)
+_LIST_SKILLS = re.compile(
+    r"^\s*(?:list\s+skills|what\s+can\s+you\s+do|show\s+skills)\s*$",
+    re.I,
+)
 _OPEN_APP = re.compile(r"^\s*open\s+(?!https?://)([a-zA-Z0-9 _.-]+)\s*$", re.I)
 _OPEN_URL = re.compile(r"^\s*open\s+(https?://\S+)\s*$", re.I)
 _LIST = re.compile(r"^\s*list\s+(?:files\s+)?(?:in\s+)?(.+)$", re.I)
@@ -55,6 +67,17 @@ def parse_intent(text: str) -> Intent:
     if not t:
         return Intent("clarify", reply="I didn’t catch that — try again.")
 
+    m = _SKILL_CMD.match(t)
+    if m:
+        return Intent(
+            "teach",
+            {
+                "tier": "skill",
+                "key": m.group(1).strip().lower(),
+                "value": m.group(2).strip(),
+            },
+        )
+
     if _AMBIGUOUS_PC.match(t):
         return Intent(
             "clarify",
@@ -66,8 +89,16 @@ def parse_intent(text: str) -> Intent:
         body = m.group(1).strip()
         # skill form: when I say X, do Y
         skill = re.match(
-            r"when i say ['\"]?(.+?)['\"]?,\s*do\s+(.+)$", body, re.I | re.S
+            r"(?:when i say|if i say|next time i say)\s+['\"]?(.+?)['\"]?[,:]?\s*(?:do|then)\s+(.+)$",
+            body,
+            re.I | re.S,
         )
+        if not skill:
+            skill = re.match(
+                r"['\"]?(.+?)['\"]?\s+means\s+(.+)$",
+                body,
+                re.I | re.S,
+            )
         if skill:
             return Intent(
                 "teach",
@@ -98,6 +129,10 @@ def parse_intent(text: str) -> Intent:
             "teach",
             {"tier": "profile", "key": body[:80].lower(), "value": body},
         )
+
+    m = _LIST_SKILLS.match(t)
+    if m:
+        return Intent("list_skills", {})
 
     m = _FORGET.match(t)
     if m:

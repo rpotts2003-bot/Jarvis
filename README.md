@@ -16,20 +16,31 @@ python -m assistant scenarios
 python -m assistant chat
 ```
 
+## Easiest way to run (Windows)
+
+**Option A — one `.exe` (best if you’re new)**  
+After GitHub Actions finishes on `main`, download **Jarvis-windows** from the repo’s Actions → Artifacts (or Releases), then double-click `Jarvis.exe`.
+
+**Option B — no build tools**  
+Double-click `Start Jarvis.bat` in this folder (needs Python installed once from python.org).
+
+Your saved lessons live in `%USERPROFILE%\.jarvis\` so they survive updates.
+
 ## Teach it
 
 ```
-> remember that my name is R.P.
-Remember name = R.P.? Say yes to confirm.
+> learn when I say morning do open calculator
+Got it — learn "morning" → open calculator? Say yes to save.
 > yes
 Got it — saved.
-> what is my name?
-R.P.
-> remember when I say morning, do open calculator
-> yes
 > morning
 Opened calculator
+> list skills
+Skills I know:
+- say "morning" → open calculator
 ```
+
+Also works: `next time I say downloads, do open chrome` · `remember that my name is R.P.`
 
 ## Safety
 

@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 
 from assistant.actions.router import ActionRouter
-from assistant.config import expand_roots, load_config
+from assistant.config import expand_roots, load_config, user_data_dir
 from assistant.core.orchestrator import Orchestrator
 from assistant.memory.store import MemoryStore
 from assistant.scenarios import run_scenarios
@@ -34,12 +34,13 @@ def build_orchestrator(data_dir: Path) -> Orchestrator:
 
 
 def chat_loop() -> None:
-    data = Path.home() / ".jarvis"
-    data.mkdir(parents=True, exist_ok=True)
+    data = user_data_dir()
     orch = build_orchestrator(data)
     name = load_config().get("assistant_name", "Jarvis")
-    print(f"{name} text console. Type 'quit' to exit. Teach with: remember that my name is …")
-    print("Confirm pending actions with: yes / no")
+    print(f"{name} — type what you want. Teach skills with:")
+    print('  learn when I say morning, do open calculator')
+    print("Then say: morning")
+    print("Other: list skills | yes/no to confirm | quit")
     while True:
         try:
             line = input("> ").strip()
@@ -55,14 +56,21 @@ def chat_loop() -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
+    import sys
+
+    # Double-click .exe → open chat with no args
+    if argv is None and getattr(sys, "frozen", False) and len(sys.argv) == 1:
+        chat_loop()
+        return
     parser = argparse.ArgumentParser(prog="jarvis")
-    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub = parser.add_subparsers(dest="cmd", required=False)
     sub.add_parser("chat", help="Text REPL (same brain as voice)")
     sub.add_parser("scenarios", help="Run reliability scenario pack")
     args = parser.parse_args(argv)
-    if args.cmd == "chat":
+    cmd = args.cmd or "chat"
+    if cmd == "chat":
         chat_loop()
-    elif args.cmd == "scenarios":
+    elif cmd == "scenarios":
         raise SystemExit(0 if run_scenarios() else 1)
 
 

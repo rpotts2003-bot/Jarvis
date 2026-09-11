@@ -71,7 +71,12 @@ class Orchestrator:
             if not confirmed:
                 self.pending = {"type": "teach", "intent": intent}
                 return TurnResult(
-                    reply=f"Remember {intent.params.get('key')} = {intent.params.get('value')}? Say yes to confirm.",
+                    reply=(
+                    f'Got it — learn "{intent.params.get("key")}" → {intent.params.get("value")}? '
+                    if intent.params.get("tier") == "skill"
+                    else f"Remember {intent.params.get('key')} = {intent.params.get('value')}? "
+                )
+                + "Say yes to save.",
                     intent=intent,
                     pending_confirm=dict(intent.params),
                 )
@@ -88,6 +93,15 @@ class Orchestrator:
                     memory_wrote=item is not None,
                 )
             )
+        if intent.kind == "list_skills":
+            skills = self.memory.list_tier("skill")
+            if not skills:
+                reply = "No skills saved yet. Teach me with: learn when I say morning, do open calculator"
+            else:
+                lines = [f'- say "{s.key}" → {s.value}' for s in skills]
+                reply = "Skills I know:\n" + "\n".join(lines)
+            return self._speak_result(TurnResult(reply=reply, intent=intent))
+
         if intent.kind == "forget":
             if not confirmed:
                 self.pending = {"type": "forget", "intent": intent}

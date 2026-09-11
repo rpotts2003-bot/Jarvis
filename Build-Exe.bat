@@ -37,16 +37,11 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo Installing voice deps ^(required inside the exe^)...
+echo Installing voice deps (sounddevice wheels - no pipwin)...
 pip install -r requirements-voice.txt
 if errorlevel 1 (
-  echo Voice pip failed — trying pipwin for PyAudio...
-  pip install pipwin
-  pipwin install pyaudio
-  if errorlevel 1 (
-    echo Build stopped: voice packages failed. Fix PyAudio, then re-run.
-    exit /b 1
-  )
+  echo Build stopped: voice packages failed.
+  exit /b 1
 )
 
 echo Running preflight...

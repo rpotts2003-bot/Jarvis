@@ -27,19 +27,13 @@ $pip = Join-Path $PSScriptRoot ".venv\Scripts\pip.exe"
 if (-not (Test-Path $py)) { Fail "venv python missing." }
 
 Write-Host "Installing core packages..."
+& $pip install -U pip
 & $pip install -r requirements.txt
 if ($LASTEXITCODE -ne 0) { Fail "pip install requirements.txt failed." }
 
-Write-Host "Installing voice packages..."
+Write-Host "Installing voice packages (sounddevice wheels - no pipwin)..."
 & $pip install -r requirements-voice.txt
-if ($LASTEXITCODE -ne 0) {
-  Write-Host "Voice pip had errors - trying pipwin for PyAudio..."
-  & $pip install pipwin
-  $pipwin = Join-Path $PSScriptRoot ".venv\Scripts\pipwin.exe"
-  if (Test-Path $pipwin) {
-    & $pipwin install pyaudio
-  }
-}
+if ($LASTEXITCODE -ne 0) { Fail "pip install requirements-voice.txt failed." }
 
 if (-not (Test-Path ".env")) {
   if (Test-Path ".env.example") {
@@ -49,8 +43,8 @@ if (-not (Test-Path ".env")) {
 }
 
 Write-Host "Checking imports..."
-& $py -c "import assistant; import yaml; print('core ok')"
-if ($LASTEXITCODE -ne 0) { Fail "core import failed." }
+& $py -c "import assistant, yaml, sounddevice, speech_recognition, pyttsx3; print('core+voice ok')"
+if ($LASTEXITCODE -ne 0) { Fail "import check failed - voice packages not installed." }
 
 Write-Host "UK TTS tip: install English (United Kingdom) speech pack in Windows Settings for a George-style voice."
 

@@ -43,9 +43,9 @@ hidden = [
 
 binaries = []
 _missing_critical = []
-for pkg in ("speech_recognition", "pyttsx3"):
+for pkg in ("speech_recognition", "pyttsx3", "sounddevice", "numpy"):
     try:
-        __import__(pkg if pkg != "speech_recognition" else "speech_recognition")
+        __import__(pkg)
         hidden += collect_submodules(pkg)
         try:
             d, b, h = collect_all(pkg)
@@ -54,18 +54,12 @@ for pkg in ("speech_recognition", "pyttsx3"):
             hidden += h
         except Exception:
             pass
+        try:
+            binaries += collect_dynamic_libs(pkg)
+        except Exception:
+            pass
     except Exception:
         _missing_critical.append(pkg)
-
-try:
-    import pyaudio  # noqa: F401
-    hidden += collect_submodules("pyaudio")
-    try:
-        binaries += collect_dynamic_libs("pyaudio")
-    except Exception:
-        pass
-except Exception:
-    _missing_critical.append("pyaudio")
 
 if _missing_critical:
     print(

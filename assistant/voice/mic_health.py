@@ -1,4 +1,4 @@
-"""First-run / Diagnose microphone health check (Voice UI + Jarvis Ideas wording)."""
+"""First-run / Diagnose microphone health check."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ MESSAGES = {
         "No microphone found. Plug one in or set a default in Windows Sound settings."
     ),
     MicStatus.PERMISSION: (
-        "Jarvis can’t use the mic. Allow microphone access for this app in Windows Privacy settings."
+        "Jarvis can't use the mic. Allow microphone access for this app in Windows Privacy settings."
     ),
     MicStatus.MISSING_DEP: (
         "Voice packages missing. Run Setup Voice (or setup.ps1), then Test mic."
@@ -79,49 +79,52 @@ def mark_probed(*, status: str) -> None:
 
 
 def probe_microphone(*, open_stream: bool = True) -> MicProbeResult:
-    """Probe default capture device. Safe to call on any OS (degrades gracefully)."""
+    """Probe default capture via sounddevice (no PyAudio)."""
     try:
-        import speech_recognition as sr  # type: ignore
+        import sounddevice as sd  # type: ignore
     except Exception as e:
         return MicProbeResult(MicStatus.MISSING_DEP, detail=str(e))
 
     try:
-        import pyaudio  # type: ignore  # noqa: F401
-    except Exception as e:
-        return MicProbeResult(MicStatus.MISSING_DEP, detail=f"PyAudio: {e}")
-
-    try:
-        names = sr.Microphone.list_microphone_names() or []
+        devices = sd.query_devices()
     except Exception as e:
         err = str(e).lower()
         if "denied" in err or "permission" in err or "access" in err:
             return MicProbeResult(MicStatus.PERMISSION, detail=str(e))
         return MicProbeResult(MicStatus.NO_DEVICE, detail=str(e))
 
-    if not names:
-        return MicProbeResult(MicStatus.NO_DEVICE, detail="empty device list")
+    inputs = [
+        d
+        for d in devices
+        if isinstance(d, dict) and int(d.get("max_input_channels", 0) or 0) > 0
+    ]
+    # PortAudio DeviceList may be list-like of dicts
+    if not inputs:
+        try:
+            count = len(devices)  # type: ignore[arg-type]
+            for i in range(count):
+                d = sd.query_devices(i)
+                if int(d.get("max_input_channels", 0) or 0) > 0:
+                    inputs.append(d)
+        except Exception:
+            pass
+
+    if not inputs:
+        return MicProbeResult(MicStatus.NO_DEVICE, detail="no input devices")
 
     if not open_stream:
-        return MicProbeResult(MicStatus.OK, detail=f"{len(names)} device(s)")
+        return MicProbeResult(MicStatus.OK, detail=f"{len(inputs)} input device(s)")
 
     try:
-        mic = sr.Microphone()
-        with mic as source:
-            # Short ambient sample — proves shared-mode open works
-            sr.Recognizer().adjust_for_ambient_noise(source, duration=0.2)
-        return MicProbeResult(MicStatus.OK, detail=f"{len(names)} device(s)")
+        # Short shared-mode capture (~0.2s)
+        sd.rec(frames=int(16000 * 0.2), samplerate=16000, channels=1, dtype="float32")
+        sd.wait()
+        return MicProbeResult(MicStatus.OK, detail=f"{len(inputs)} input device(s)")
     except PermissionError as e:
         return MicProbeResult(MicStatus.PERMISSION, detail=str(e))
-    except OSError as e:
-        err = str(e).lower()
-        if "denied" in err or "permission" in err or "access" in err:
-            return MicProbeResult(MicStatus.PERMISSION, detail=str(e))
-        if "mute" in err or "invalid" in err or "(-9999" in err:
-            return MicProbeResult(MicStatus.OS_MUTED, detail=str(e))
-        return MicProbeResult(MicStatus.NO_DEVICE, detail=str(e))
     except Exception as e:
         err = str(e).lower()
-        if "denied" in err or "permission" in err:
+        if "denied" in err or "permission" in err or "access" in err:
             return MicProbeResult(MicStatus.PERMISSION, detail=str(e))
         if "mute" in err:
             return MicProbeResult(MicStatus.OS_MUTED, detail=str(e))

@@ -132,41 +132,50 @@ def make_tts() -> TTSAdapter:
 
 
 def make_mic_hear(
-
     *,
     on_level: Callable[[float], None] | None = None,
 ) -> Callable[[], str | None] | None:
+    """Record a short phrase via sounddevice; recognize with SpeechRecognition.
+
+    Prefer WASAPI shared mode (PortAudio default on Windows). No PyAudio.
+    """
     try:
+        import numpy as np  # type: ignore
+        import sounddevice as sd  # type: ignore
         import speech_recognition as sr  # type: ignore
     except Exception:
         return None
 
     recognizer = sr.Recognizer()
-    recognizer.dynamic_energy_threshold = True
-    try:
-        mic = sr.Microphone()
-    except Exception:
-        return None
+    sample_rate = 16000
 
     def hear() -> str | None:
         try:
-            with mic as source:
-                recognizer.adjust_for_ambient_noise(source, duration=0.3)
-                audio = recognizer.listen(source, timeout=2, phrase_time_limit=5)
+            duration = 4.0
+            audio = sd.rec(
+                int(duration * sample_rate),
+                samplerate=sample_rate,
+                channels=1,
+                dtype="float32",
+            )
+            sd.wait()
             if on_level:
-                on_level(0.4)
+                peak = float(np.max(np.abs(audio))) if audio is not None else 0.0
+                on_level(min(1.0, peak * 4))
+            # float32 -1..1 -> int16 PCM for SpeechRecognition
+            pcm = (np.clip(audio.flatten(), -1.0, 1.0) * 32767.0).astype(np.int16)
+            audio_data = sr.AudioData(pcm.tobytes(), sample_rate, 2)
             try:
-                return str(recognizer.recognize_whisper(audio, model="base"))  # type: ignore[attr-defined]
-            except Exception:
-                pass
-            try:
-                return str(recognizer.recognize_google(audio))
+                return str(recognizer.recognize_google(audio_data))
             except Exception:
                 return None
+        except PermissionError:
+            raise
         except Exception:
             return None
 
     return hear
+
 
 
 def make_stt() -> STTAdapter:

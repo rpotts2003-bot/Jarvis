@@ -2,7 +2,7 @@
 
 Local-first desktop assistant brain: **push-to-talk ready state machine**, **teachable memory**, **allowlisted PC actions**, and a **listening orb model** (Idle / Listening / Thinking / Speaking).
 
-> This MVP runs fully offline for intent + memory + action policy. Real Whisper STT / Windows SAPI TTS adapters are stubbed behind interfaces — wire them on your Windows PC when you are ready for mic/speakers.
+> Core intent + memory + actions run offline. Voice uses Windows TTS + Google STT (online) via `sounddevice`; optional OpenAI chat needs a key in `.env`.
 
 ## Quick start
 
@@ -103,7 +103,7 @@ Speech uses **free Windows British male TTS** when available (prefers *George* /
 
 Jarvis listens in the background and **only responds after you say its name** (`Jarvis` by default). Use the **Mute** button on the HUD to silence the mic.
 
-1. Run `Setup Voice.bat` once (installs mic/TTS packages; PyAudio can be fiddly on Windows).
+1. Run `Setup Voice.bat` once (installs mic/TTS via `sounddevice` wheels — no pipwin/PyAudio).
 2. Allow mic access if Windows asks.
 3. Say: `Jarvis, what time is it?`
 

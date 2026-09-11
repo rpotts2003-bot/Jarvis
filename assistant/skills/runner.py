@@ -71,7 +71,7 @@ def try_registry_skill(
 
             result = probe_microphone()
             mark_probed(status=result.status.value)
-            reply = "Microphone OK." if result.ok else (result.message + " You can also run setup.ps1.")
+            reply = "Microphone OK." if result.ok else (result.message + " Typing still works.")
         elif skill.reply_template:
             reply = skill.reply_template
         else:

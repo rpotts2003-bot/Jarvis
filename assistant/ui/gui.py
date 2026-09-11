@@ -165,7 +165,7 @@ class JarvisWindow:
             if self.wake.hear is None:
                 self.caption.configure(
                     text=(status_hint or "")
-                    + " — mic libs missing; type for now. Run setup.ps1"
+                    + " — mic libs missing; type for now. Re-run Start Jarvis.bat"
                 )
         self.root.after(400, self._maybe_first_mic_probe)
 

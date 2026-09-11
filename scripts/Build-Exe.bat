@@ -1,7 +1,7 @@
 @echo off
 setlocal EnableExtensions
 title Build Jarvis.exe
-cd /d "%~dp0"
+cd /d "%~dp0.."
 
 echo === Jarvis Windows one-file build ===
 

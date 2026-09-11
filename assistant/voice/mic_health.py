@@ -27,7 +27,7 @@ MESSAGES = {
         "Jarvis can't use the mic. Allow microphone access for this app in Windows Privacy settings."
     ),
     MicStatus.MISSING_DEP: (
-        "Voice packages missing. Run Setup Voice (or setup.ps1), then Test mic."
+        "Voice packages missing. Double-click Start Jarvis.bat to install them, then Test mic."
     ),
     MicStatus.OS_MUTED: (
         "Windows has the mic muted or volume at 0. Unmute it in the system tray, then Test mic."

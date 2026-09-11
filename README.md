@@ -27,11 +27,19 @@ Talk by typing in the bar for now (mic/TTS on Windows comes next). Built-ins wor
 
 ## Easiest way to run (Windows)
 
-**Option A — one `.exe` (best if you’re new)**  
-After GitHub Actions finishes on `main`, download **Jarvis-windows** from the repo’s Actions → Artifacts (or Releases), then double-click `Jarvis.exe`.
+**Option A — one `.exe`**  
+On a Windows PC with Python installed:
 
-**Option B — no build tools**  
-Double-click `Start Jarvis.bat` in this folder (needs Python installed once from python.org).
+```bat
+Build-Exe.bat
+```
+
+Then run `dist\Jarvis.exe`. Optional: put a `.env` next to the exe with `OPENAI_API_KEY=...`.
+
+If GitHub Actions is enabled for this repo, **Actions → Windows exe → Jarvis-windows** artifact is the same file.
+
+**Option B — Python folder (dev / troubleshooting)**  
+Run `setup.ps1`, then `Start Jarvis.bat`.
 
 Your saved lessons live in `%USERPROFILE%\.jarvis\` so they survive updates.
 

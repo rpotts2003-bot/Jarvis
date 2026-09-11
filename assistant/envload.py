@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 from assistant.config import app_root, user_data_dir
@@ -23,6 +24,9 @@ def _parse_env_file(path: Path) -> None:
 
 
 def load_env() -> None:
+    # Next to frozen exe (user-editable), then bundle, then ~/.jarvis
+    if getattr(sys, "frozen", False):
+        _parse_env_file(Path(sys.executable).resolve().parent / ".env")
     _parse_env_file(app_root() / ".env")
     _parse_env_file(user_data_dir() / ".env")
 

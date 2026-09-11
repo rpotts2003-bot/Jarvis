@@ -13,10 +13,10 @@ function Fail([string]$Reason) {
 Write-Host "Jarvis setup starting..."
 
 if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
-  Fail "Python not found. Install from python.org and tick 'Add to PATH' and 'tcl/tk'."
+  Fail "Python not found. Install from python.org and tick Add to PATH and tcl/tk."
 }
 
-if (-not (Test-Path .venv)) {
+if (-not (Test-Path ".venv")) {
   Write-Host "Creating .venv..."
   python -m venv .venv
   if ($LASTEXITCODE -ne 0) { Fail "venv create failed." }
@@ -33,15 +33,18 @@ if ($LASTEXITCODE -ne 0) { Fail "pip install requirements.txt failed." }
 Write-Host "Installing voice packages..."
 & $pip install -r requirements-voice.txt
 if ($LASTEXITCODE -ne 0) {
-  Write-Host "Voice pip had errors — trying pipwin for PyAudio..."
+  Write-Host "Voice pip had errors - trying pipwin for PyAudio..."
   & $pip install pipwin
-  & $PSScriptRoot\.venv\Scripts\pipwin.exe install pyaudio
+  $pipwin = Join-Path $PSScriptRoot ".venv\Scripts\pipwin.exe"
+  if (Test-Path $pipwin) {
+    & $pipwin install pyaudio
+  }
 }
 
-if (-not (Test-Path .env)) {
-  if (Test-Path .env.example) {
-    Copy-Item .env.example .env
-    Write-Host "Created .env from .env.example — add OPENAI_API_KEY for free-form chat."
+if (-not (Test-Path ".env")) {
+  if (Test-Path ".env.example") {
+    Copy-Item ".env.example" ".env"
+    Write-Host "Created .env from .env.example - add OPENAI_API_KEY for free-form chat."
   }
 }
 
@@ -58,21 +61,30 @@ if ($SkipMic) {
 }
 
 Write-Host "Probing microphone..."
-& $py -c @"
-from assistant.voice.mic_health import probe_microphone, mark_probed
-r = probe_microphone()
-mark_probed(status=r.status.value)
-print(r.status.value)
-print(r.message)
-raise SystemExit(0 if r.ok else 2)
-"@
+$probe = Join-Path $PSScriptRoot "_mic_probe_tmp.py"
+@(
+  "from assistant.voice.mic_health import probe_microphone, mark_probed"
+  "r = probe_microphone()"
+  "mark_probed(status=r.status.value)"
+  "print(r.status.value)"
+  "print(r.message)"
+  "raise SystemExit(0 if r.ok else 2)"
+) | Set-Content -Path $probe -Encoding ASCII
+
+& $py $probe
 $code = $LASTEXITCODE
+Remove-Item $probe -ErrorAction SilentlyContinue
+
 if ($code -eq 0) {
   Write-Host "Microphone OK."
   Write-Host "Setup finished. Run Start Jarvis.bat"
   exit 0
 }
 
-# Read last status from a quick re-probe for blocker line
-$status = & $py -c "from assistant.voice.mic_health import probe_microphone; print(probe_microphone().status.value)"
+$status = "unknown"
+try {
+  $status = & $py -c "from assistant.voice.mic_health import probe_microphone; print(probe_microphone().status.value)"
+} catch {
+  $status = "error"
+}
 Fail "microphone check failed ($status). Fix that, re-run, or use -SkipMic."

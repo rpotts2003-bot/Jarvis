@@ -117,6 +117,7 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("gui", help="Desktop window (chat + orb)")
     sub.add_parser("chat", help="Text-only console")
     sub.add_parser("scenarios", help="Run reliability scenario pack")
+    sub.add_parser("diagnose", help="Mic/TTS health check (for smoke / exe)")
     args = parser.parse_args(argv)
     cmd = args.cmd or "gui"
     if cmd == "gui":
@@ -125,6 +126,26 @@ def main(argv: list[str] | None = None) -> None:
         chat_loop()
     elif cmd == "scenarios":
         raise SystemExit(0 if run_scenarios() else 1)
+    elif cmd == "diagnose":
+        from assistant.voice.mic_health import mark_probed, probe_microphone
+        from assistant.voice.platform_io import make_tts
+
+        load_env()
+        result = probe_microphone()
+        mark_probed(status=result.status.value)
+        print(f"mic: {result.status.value}")
+        print(result.message)
+        # TTS must not crash
+        try:
+            make_tts().speak("")  # no-op empty
+            print("tts: ok")
+        except Exception as e:
+            print(f"tts: fail ({e})")
+            raise SystemExit(1)
+        # missing_dep is a packaging failure for frozen voice builds
+        if result.status.value == "missing_dep":
+            raise SystemExit(2)
+        raise SystemExit(0 if result.ok else 3)
 
 
 if __name__ == "__main__":

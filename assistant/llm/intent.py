@@ -14,6 +14,8 @@ IntentKind = Literal[
     "set_volume",
     "set_mute",
     "type_text",
+    "add_to_plex",
+    "plex_scan",
     "clarify",
     "chat",
 ]
@@ -39,6 +41,10 @@ _LIST = re.compile(r"^\s*list\s+(?:files\s+)?(?:in\s+)?(.+)$", re.I)
 _VOL = re.compile(r"^\s*(?:set\s+)?volume\s+(?:to\s+)?(\d{1,3})\s*$", re.I)
 _MUTE = re.compile(r"^\s*(mute|unmute)\s*$", re.I)
 _TYPE = re.compile(r"^\s*type\s+(.+)$", re.I)
+_ADD_PLEX = re.compile(
+    r"^\s*add\s+(.+?)\s+to\s+plex(?:\s+library)?\s*$", re.I
+)
+_SCAN_PLEX = re.compile(r"^\s*(?:scan|refresh)\s+plex(?:\s+library)?\s*$", re.I)
 _AMBIGUOUS_PC = re.compile(
     r"^\s*(do something(?:\s+to\s+my\s+(?:pc|computer))?|fix my (?:pc|computer)|make it work)\s*$", re.I
 )
@@ -124,5 +130,13 @@ def parse_intent(text: str) -> Intent:
     m = _TYPE.match(t)
     if m:
         return Intent("type_text", {"text": m.group(1)})
+
+    m = _ADD_PLEX.match(t)
+    if m:
+        return Intent("add_to_plex", {"source": m.group(1).strip().strip('"').strip("'"), "mode": "copy"})
+
+    m = _SCAN_PLEX.match(t)
+    if m:
+        return Intent("plex_scan", {})
 
     return Intent("chat", reply=f"You said: {t}")

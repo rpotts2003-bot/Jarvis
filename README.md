@@ -46,3 +46,21 @@ See `config.yaml` for apps, folder roots, and timeouts.
 
 `pytest` covers memory, router, voice state machine, and orchestrator confirm gates.  
 `python -m assistant scenarios` runs the reliability scenario pack (must be all PASS).
+
+
+## Plex library import (local files only)
+
+Jarvis will **not** download movies from the web. It can copy/move files you already have into your Plex Movies folder.
+
+1. Install [Plex Media Server](https://www.plex.tv/media-server-downloads/) on your laptop.
+2. Create a folder e.g. `C:\PlexMedia\Movies` and add it as a Movies library in Plex.
+3. Set `plex.library_dir` in `config.yaml` to that folder.
+4. Keep your source files under an allowlisted root (`~/Downloads`, `~/Documents`, etc.).
+5. In chat:
+
+```
+> add ~/Downloads/MyMovie.mp4 to plex
+Confirm copy MyMovie.mp4 into Plex library?
+> yes
+> scan plex
+```

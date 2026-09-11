@@ -123,6 +123,8 @@ class Orchestrator:
             "set_volume": "set_volume",
             "set_mute": "set_mute",
             "type_text": "type_text",
+            "add_to_plex": "add_to_plex",
+            "plex_scan": "plex_scan",
         }
         if intent.kind in action_map:
             # skill invocation: "open X" not used; check if raw skill exists for clarify path

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable
 
 
 class Risk(str, Enum):
@@ -25,8 +24,29 @@ CATALOG: dict[str, ActionSpec] = {
     "list_files": ActionSpec("list_files", Risk.LOW, "List files under an approved folder root"),
     "set_volume": ActionSpec("set_volume", Risk.LOW, "Set system volume 0-100"),
     "set_mute": ActionSpec("set_mute", Risk.LOW, "Mute or unmute system audio"),
+    "add_to_plex": ActionSpec(
+        "add_to_plex",
+        Risk.MEDIUM,
+        "Copy or move a local media file into the approved Plex library folder",
+    ),
+    "plex_scan": ActionSpec(
+        "plex_scan",
+        Risk.LOW,
+        "Request a Plex library refresh (local server hook)",
+    ),
 }
 
 BLOCKED_ACTIONS = frozenset(
-    {"delete_file", "run_shell", "shell", "send_message", "install", "shutdown"}
+    {
+        "delete_file",
+        "run_shell",
+        "shell",
+        "send_message",
+        "install",
+        "shutdown",
+        "download",
+        "torrent",
+        "pirate",
+        "web_download",
+    }
 )

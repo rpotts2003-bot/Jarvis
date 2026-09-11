@@ -15,7 +15,9 @@ def build_orchestrator(data_dir: Path) -> Orchestrator:
     cfg = load_config()
     allow = cfg.get("allowlist", {})
     perms = cfg.get("permissions", {})
+    plex_cfg = cfg.get("plex", {})
     memory = MemoryStore(data_dir / "memory.db")
+    plex_dir = plex_cfg.get("library_dir")
     router = ActionRouter(
         allowlisted_apps=list(allow.get("apps", [])),
         allowlisted_domains=list(allow.get("url_domains", [])),
@@ -25,6 +27,7 @@ def build_orchestrator(data_dir: Path) -> Orchestrator:
         ),
         type_text_long_chars=int(perms.get("type_text_long_chars", 200)),
         type_text_confirm_long=bool(perms.get("type_text_confirm_long", True)),
+        plex_library_dir=Path(plex_dir).expanduser() if plex_dir else None,
         audit_path=data_dir / "audit.jsonl",
     )
     return Orchestrator(memory=memory, router=router)

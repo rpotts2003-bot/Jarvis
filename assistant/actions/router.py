@@ -9,6 +9,7 @@ from typing import Any, Callable
 from urllib.parse import urlparse
 
 from assistant.actions.catalog import BLOCKED_ACTIONS, CATALOG, Risk
+from assistant.actions import plex as plex_actions
 
 
 @dataclass
@@ -45,6 +46,10 @@ class ActionRouter:
         list_dir_fn: Callable[[Path], list[str]] | None = None,
         set_volume_fn: Callable[[int], None] | None = None,
         set_mute_fn: Callable[[bool], None] | None = None,
+        plex_library_dir: Path | None = None,
+        copy_file_fn: Callable[[Path, Path], None] | None = None,
+        move_file_fn: Callable[[Path, Path], None] | None = None,
+        plex_scan_fn: Callable[[], str] | None = None,
         audit_path: Path | None = None,
     ):
         self.apps = {a.lower() for a in allowlisted_apps}
@@ -59,6 +64,12 @@ class ActionRouter:
         self._list_dir = list_dir_fn or (lambda p: [x.name for x in p.iterdir()])
         self._set_volume = set_volume_fn or (lambda v: None)
         self._set_mute = set_mute_fn or (lambda m: None)
+        self.plex_library_dir = (
+            plex_library_dir.expanduser().resolve() if plex_library_dir else None
+        )
+        self._copy_file = copy_file_fn
+        self._move_file = move_file_fn
+        self._plex_scan_fn = plex_scan_fn
         self.audit_path = audit_path
         self.audit_log: list[dict[str, Any]] = []
         self._volume = 50
@@ -84,6 +95,8 @@ class ActionRouter:
             "list_files": self._list_files_action,
             "set_volume": self._set_volume_action,
             "set_mute": self._set_mute_action,
+            "add_to_plex": self._add_to_plex_action,
+            "plex_scan": self._plex_scan_action,
         }[action]
         result = handler(req)
         self._audit(req, result)
@@ -209,6 +222,38 @@ class ActionRouter:
         self._muted = muted
         self._set_mute(muted)
         return ActionResult(ok=True, action="set_mute", message=f"Muted={muted}", data={"muted": muted})
+
+
+    def _add_to_plex_action(self, req: ActionRequest) -> ActionResult:
+        raw = plex_actions.add_local_file_to_plex(
+            source=str(req.params.get("source", "")),
+            plex_library_dir=self.plex_library_dir,
+            approved_roots=self.roots,
+            confirmed=req.confirmed,
+            mode=str(req.params.get("mode", "copy")),
+            overwrite=bool(req.params.get("overwrite", False)),
+            scan_after=bool(req.params.get("scan", True)),
+            copy_file_fn=self._copy_file,
+            move_file_fn=self._move_file,
+            scan_fn=self._plex_scan_fn,
+        )
+        return ActionResult(
+            ok=bool(raw["ok"]),
+            action="add_to_plex",
+            message=str(raw["message"]),
+            data=dict(raw.get("data") or {}),
+            blocked_reason=raw.get("blocked_reason"),
+        )
+
+    def _plex_scan_action(self, req: ActionRequest) -> ActionResult:
+        raw = plex_actions.request_plex_scan(scan_fn=self._plex_scan_fn)
+        return ActionResult(
+            ok=bool(raw["ok"]),
+            action="plex_scan",
+            message=str(raw["message"]),
+            data=dict(raw.get("data") or {}),
+            blocked_reason=raw.get("blocked_reason"),
+        )
 
     def _under_roots(self, path: Path) -> bool:
         for root in self.roots:

@@ -112,6 +112,34 @@ def run_scenarios() -> bool:
             r.action_ok is None and apps10 == [] and urls10 == [] and "What should I do" in (r.reply or ""),
         )
 
+
+        # S11 add local file to plex library
+        src_root = tmp / "dl"
+        lib = tmp / "plexlib"
+        src_root.mkdir()
+        lib.mkdir()
+        movie = src_root / "MyFilm.mkv"
+        movie.write_bytes(b"x")
+        scans = []
+        from assistant.actions.router import ActionRouter
+        from assistant.core.orchestrator import Orchestrator
+        from assistant.memory.store import MemoryStore
+        mem = MemoryStore(tmp / "s11.db")
+        router = ActionRouter(
+            allowlisted_apps=[],
+            allowlisted_domains=[],
+            folder_roots=[src_root],
+            plex_library_dir=lib,
+            plex_scan_fn=lambda: scans.append(1) or "scanned",
+        )
+        orch11 = Orchestrator(memory=mem, router=router)
+        orch11.handle_utterance(f"add {movie} to plex")
+        r = orch11.handle_utterance("yes")
+        check(
+            "S11 add to plex",
+            r.action_ok is True and (lib / "MyFilm.mkv").exists() and scans == [1],
+        )
+
         # V9 late STT ignored
         v = orch.voice
         v.start_listen()

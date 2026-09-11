@@ -9,5 +9,10 @@ if not exist .venv (
 ) else (
   call .venv\Scripts\activate
 )
-python -m assistant chat
-pause
+echo Starting Jarvis window...
+python -m assistant gui
+if errorlevel 1 (
+  echo.
+  echo If you saw a tkinter error, reinstall Python from python.org and tick "tcl/tk".
+  pause
+)

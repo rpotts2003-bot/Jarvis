@@ -16,6 +16,15 @@ python -m assistant scenarios
 python -m assistant chat
 ```
 
+## Desktop window
+
+`Start Jarvis.bat` (or `python -m assistant gui`) opens a **dark window** with:
+- a glowing status orb (Idle / Listening / Thinking / Speaking)
+- a chat log
+- a text box + **Send**
+
+Type in the box and press Enter. Use **Listening demo** to preview the glow (microphone comes later).
+
 ## Easiest way to run (Windows)
 
 **Option A — one `.exe` (best if you’re new)**  

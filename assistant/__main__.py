@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-import tempfile
+import sys
 from pathlib import Path
 
 from assistant.actions.router import ActionRouter
@@ -38,7 +38,7 @@ def chat_loop() -> None:
     orch = build_orchestrator(data)
     name = load_config().get("assistant_name", "Jarvis")
     print(f"{name} — type what you want. Teach skills with:")
-    print('  learn when I say morning, do open calculator')
+    print("  learn when I say morning, do open calculator")
     print("Then say: morning")
     print("Other: list skills | yes/no to confirm | quit")
     while True:
@@ -55,20 +55,34 @@ def chat_loop() -> None:
         print(turn.reply)
 
 
-def main(argv: list[str] | None = None) -> None:
-    import sys
+def gui_loop() -> None:
+    from assistant.ui.gui import run_gui
 
-    # Double-click .exe → open chat with no args
-    if argv is None and getattr(sys, "frozen", False) and len(sys.argv) == 1:
-        chat_loop()
+    data = user_data_dir()
+    orch = build_orchestrator(data)
+    name = load_config().get("assistant_name", "Jarvis")
+
+    def on_submit(text: str) -> str:
+        return orch.handle_utterance(text).reply or ""
+
+    run_gui(title=name, on_submit=on_submit)
+
+
+def main(argv: list[str] | None = None) -> None:
+    # Double-click / no args → GUI window
+    if argv is None and len(sys.argv) == 1:
+        gui_loop()
         return
     parser = argparse.ArgumentParser(prog="jarvis")
     sub = parser.add_subparsers(dest="cmd", required=False)
-    sub.add_parser("chat", help="Text REPL (same brain as voice)")
+    sub.add_parser("gui", help="Desktop window (chat + orb)")
+    sub.add_parser("chat", help="Text-only console")
     sub.add_parser("scenarios", help="Run reliability scenario pack")
     args = parser.parse_args(argv)
-    cmd = args.cmd or "chat"
-    if cmd == "chat":
+    cmd = args.cmd or "gui"
+    if cmd == "gui":
+        gui_loop()
+    elif cmd == "chat":
         chat_loop()
     elif cmd == "scenarios":
         raise SystemExit(0 if run_scenarios() else 1)

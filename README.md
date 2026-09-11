@@ -18,12 +18,12 @@ python -m assistant chat
 
 ## Desktop window
 
-`Start Jarvis.bat` (or `python -m assistant gui`) opens a **dark window** with:
-- a glowing status orb (Idle / Listening / Thinking / Speaking)
-- a chat log
-- a text box + **Send**
+`Start Jarvis.bat` (or `python -m assistant gui`) opens a **HUD-style window**:
+- large cyan concentric orb on a dark grid (Idle / Listening / Thinking / Speaking animations)
+- one-line caption for the last reply (no chat wall)
+- tiny text bar at the bottom + **Hold** demo for the listen/speak glow
 
-Type in the box and press Enter. Use **Listening demo** to preview the glow (microphone comes later).
+Talk by typing in the bar for now (mic/TTS on Windows comes next). Built-ins work without teaching: `hi`, `help`, `what time is it`. Free-form chat needs `OPENAI_API_KEY` in the environment; skills, Plex, and allowlisted actions still work offline.
 
 ## Easiest way to run (Windows)
 

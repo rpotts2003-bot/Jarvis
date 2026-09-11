@@ -44,7 +44,7 @@ _RECALL = re.compile(
 )
 _FORGET = re.compile(r"^\s*forget\s+(.+)$", re.I)
 _LIST_SKILLS = re.compile(
-    r"^\s*(?:list\s+skills|what\s+can\s+you\s+do|show\s+skills)\s*$",
+    r"^\s*(?:list\s+skills|show\s+skills)\s*$",
     re.I,
 )
 _OPEN_APP = re.compile(r"^\s*open\s+(?!https?://)([a-zA-Z0-9 _.-]+)\s*$", re.I)
@@ -174,4 +174,4 @@ def parse_intent(text: str) -> Intent:
     if m:
         return Intent("plex_scan", {})
 
-    return Intent("chat", reply=f"You said: {t}")
+    return Intent("chat", reply=None, params={"text": t})

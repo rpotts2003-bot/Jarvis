@@ -1,236 +1,226 @@
-"""Tkinter desktop window: chat + glowing status orb."""
+"""Minimal Jarvis HUD: cyan ring visual + tiny input. Matches user reference aesthetic."""
 
 from __future__ import annotations
 
 import math
+import sys
 import tkinter as tk
-from tkinter import scrolledtext, font as tkfont
+from pathlib import Path
 from typing import Callable
 
 from assistant.voice.state_machine import VoiceState
 
+CYAN = "#00e5ff"
+CYAN_DIM = "#00838f"
+BG = "#0a0e14"
 
-# Colors per state (orb fill / glow)
-_ORB = {
-    VoiceState.IDLE: ("#1a3a4a", "#3d7a9a"),
-    VoiceState.LISTENING: ("#00e5ff", "#80f0ff"),
-    VoiceState.THINKING: ("#b388ff", "#7c4dff"),
-    VoiceState.SPEAKING: ("#69f0ae", "#00c853"),
-    VoiceState.ERROR: ("#ff5252", "#ff8a80"),
-}
+
+def _asset(name: str) -> Path | None:
+    here = Path(__file__).resolve().parent / "assets" / name
+    if here.exists():
+        return here
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        p = Path(sys._MEIPASS) / "assistant" / "ui" / "assets" / name  # type: ignore[attr-defined]
+        if p.exists():
+            return p
+    return None
 
 
 class JarvisWindow:
-    def __init__(
-        self,
-        *,
-        title: str,
-        on_submit: Callable[[str], str],
-        on_listen_visual: Callable[[VoiceState], None] | None = None,
-    ):
+    def __init__(self, *, title: str, on_submit: Callable[[str], str]):
         self.on_submit = on_submit
-        self.on_listen_visual = on_listen_visual
         self.state = VoiceState.IDLE
-        self._pulse = 0.0
-        self._anim_job: str | None = None
+        self._t = 0.0
+        self._photo = None
 
         self.root = tk.Tk()
         self.root.title(title)
-        self.root.geometry("720x560")
-        self.root.minsize(520, 420)
-        self.root.configure(bg="#0b1220")
+        self.root.geometry("900x700")
+        self.root.minsize(640, 520)
+        self.root.configure(bg=BG)
+        try:
+            self.root.attributes("-alpha", 0.98)
+        except tk.TclError:
+            pass
 
-        header = tk.Frame(self.root, bg="#0b1220")
-        header.pack(fill=tk.X, padx=16, pady=(16, 8))
+        self.canvas = tk.Canvas(self.root, bg=BG, highlightthickness=0)
+        self.canvas.pack(fill=tk.BOTH, expand=True)
 
-        self.canvas = tk.Canvas(
-            header, width=120, height=120, bg="#0b1220", highlightthickness=0
-        )
-        self.canvas.pack(side=tk.LEFT)
-
-        status_box = tk.Frame(header, bg="#0b1220")
-        status_box.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(16, 0))
-        title_font = tkfont.Font(family="Segoe UI", size=18, weight="bold")
-        self.status_label = tk.Label(
-            status_box,
-            text="Idle — type below and press Send",
-            fg="#e3f2fd",
-            bg="#0b1220",
-            font=title_font,
-            anchor="w",
-            justify=tk.LEFT,
-        )
-        self.status_label.pack(fill=tk.X)
-        tip = tk.Label(
-            status_box,
-            text='Try: learn when I say morning do open calculator\nThen: yes   →   morning   →   list skills',
-            fg="#90a4ae",
-            bg="#0b1220",
-            font=("Segoe UI", 10),
-            anchor="w",
-            justify=tk.LEFT,
-        )
-        tip.pack(fill=tk.X, pady=(8, 0))
-
-        self.chat = scrolledtext.ScrolledText(
+        # Caption under orb (last reply) — small, not a chat wall
+        self.caption = tk.Label(
             self.root,
-            wrap=tk.WORD,
-            height=16,
-            bg="#111827",
-            fg="#e5e7eb",
-            insertbackground="#e5e7eb",
-            font=("Consolas", 11),
-            relief=tk.FLAT,
-            padx=10,
-            pady=10,
+            text="Listening for you… type below or press Hold to talk (soon)",
+            fg="#b0bec5",
+            bg=BG,
+            font=("Segoe UI", 11),
+            wraplength=760,
+            justify=tk.CENTER,
         )
-        self.chat.pack(fill=tk.BOTH, expand=True, padx=16, pady=8)
-        self.chat.configure(state=tk.DISABLED)
-        self.chat.tag_configure("you", foreground="#80cbc4")
-        self.chat.tag_configure("jarvis", foreground="#ffe082")
-        self.chat.tag_configure("sys", foreground="#90a4ae")
+        self.caption.place(relx=0.5, rely=0.82, anchor="center")
 
-        row = tk.Frame(self.root, bg="#0b1220")
-        row.pack(fill=tk.X, padx=16, pady=(0, 16))
+        bar = tk.Frame(self.root, bg=BG)
+        bar.place(relx=0.5, rely=0.93, anchor="center", relwidth=0.7)
 
         self.entry = tk.Entry(
-            row,
-            bg="#1f2937",
-            fg="#f9fafb",
-            insertbackground="#f9fafb",
-            font=("Segoe UI", 12),
+            bar,
+            bg="#121820",
+            fg="#e0f7fa",
+            insertbackground=CYAN,
             relief=tk.FLAT,
+            font=("Segoe UI", 12),
+            highlightthickness=1,
+            highlightbackground=CYAN_DIM,
+            highlightcolor=CYAN,
         )
         self.entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=8, padx=(0, 8))
         self.entry.bind("<Return>", lambda _e: self._send())
         self.entry.focus_set()
 
         self.listen_btn = tk.Button(
-            row,
-            text="Listening demo",
-            command=self._demo_listen,
-            bg="#1565c0",
-            fg="white",
-            activebackground="#1976d2",
+            bar,
+            text="● Hold",
+            command=self._pulse_listen,
+            bg="#102027",
+            fg=CYAN,
+            activebackground="#1a333d",
+            activeforeground=CYAN,
             relief=tk.FLAT,
-            padx=12,
+            padx=14,
             pady=8,
             font=("Segoe UI", 10, "bold"),
         )
-        self.listen_btn.pack(side=tk.LEFT, padx=(0, 8))
+        self.listen_btn.pack(side=tk.LEFT)
 
-        send_btn = tk.Button(
-            row,
-            text="Send",
-            command=self._send,
-            bg="#00897b",
-            fg="white",
-            activebackground="#26a69a",
-            relief=tk.FLAT,
-            padx=16,
-            pady=8,
-            font=("Segoe UI", 10, "bold"),
-        )
-        send_btn.pack(side=tk.LEFT)
-
-        self._append_sys(
-            "Welcome. Type in the box at the bottom and press Send (or Enter).\n"
-            "The glowing circle shows status. “Listening demo” previews the Listening glow "
-            "(real mic comes later)."
-        )
-        self._draw_orb()
+        self.root.bind("<Configure>", lambda _e: self._draw())
+        self._load_hud_image()
+        self._draw()
         self._tick()
 
-    def _append(self, who: str, text: str, tag: str) -> None:
-        self.chat.configure(state=tk.NORMAL)
-        self.chat.insert(tk.END, f"{who}: ", tag)
-        self.chat.insert(tk.END, text.rstrip() + "\n\n")
-        self.chat.see(tk.END)
-        self.chat.configure(state=tk.DISABLED)
-
-    def _append_sys(self, text: str) -> None:
-        self.chat.configure(state=tk.NORMAL)
-        self.chat.insert(tk.END, text.rstrip() + "\n\n", "sys")
-        self.chat.see(tk.END)
-        self.chat.configure(state=tk.DISABLED)
+    def _load_hud_image(self) -> None:
+        path = _asset("hud_orb.png")
+        self._hud_path = path
+        self._photo = None
+        if path is None:
+            return
+        try:
+            self._base_img = tk.PhotoImage(file=str(path))
+        except tk.TclError:
+            self._base_img = None
 
     def set_state(self, state: VoiceState, detail: str | None = None) -> None:
         self.state = state
-        labels = {
-            VoiceState.IDLE: "Idle — type below and press Send",
-            VoiceState.LISTENING: "Listening — I’m ready for your words",
-            VoiceState.THINKING: "Thinking…",
-            VoiceState.SPEAKING: "Speaking (reply below)",
-            VoiceState.ERROR: "Error",
-        }
-        msg = labels.get(state, state.value)
         if detail:
-            msg = f"{msg} — {detail}"
-        self.status_label.configure(text=msg)
-        if self.on_listen_visual:
-            self.on_listen_visual(state)
-        self._draw_orb()
+            self.caption.configure(text=detail)
+        self._draw()
 
-    def _draw_orb(self) -> None:
-        self.canvas.delete("all")
-        cx, cy = 60, 60
-        base, glow = _ORB.get(self.state, _ORB[VoiceState.IDLE])
-        # outer glow
-        for i, r in enumerate((54, 48, 42)):
-            scale = 1.0
-            if self.state == VoiceState.LISTENING:
-                scale = 1.0 + 0.08 * math.sin(self._pulse)
-            elif self.state == VoiceState.SPEAKING:
-                scale = 1.0 + 0.06 * math.sin(self._pulse * 1.7)
-            elif self.state == VoiceState.THINKING:
-                scale = 1.0 + 0.03 * math.sin(self._pulse * 0.8)
-            rr = r * scale
-            color = glow if i == 0 else base
-            self.canvas.create_oval(
-                cx - rr, cy - rr, cx + rr, cy + rr, outline=color, width=2 if i else 3
-            )
-        # core
-        core_r = 22 + (4 * math.sin(self._pulse) if self.state != VoiceState.IDLE else 0)
-        self.canvas.create_oval(
-            cx - core_r,
-            cy - core_r,
-            cx + core_r,
-            cy + core_r,
-            fill=base,
-            outline=glow,
-            width=2,
-        )
-
-    def _tick(self) -> None:
-        self._pulse += 0.25
-        self._draw_orb()
-        self._anim_job = self.root.after(50, self._tick)
-
-    def _demo_listen(self) -> None:
-        """Visual-only preview of Listening → Thinking → Speaking → Idle."""
-        self.set_state(VoiceState.LISTENING)
-        self.root.after(1200, lambda: self.set_state(VoiceState.THINKING))
-        self.root.after(2200, lambda: self.set_state(VoiceState.SPEAKING))
-        self.root.after(3400, lambda: self.set_state(VoiceState.IDLE))
+    def _pulse_listen(self) -> None:
+        self.set_state(VoiceState.LISTENING, "Listening…")
+        self.root.after(1500, lambda: self.set_state(VoiceState.THINKING, "Thinking…"))
+        self.root.after(2600, lambda: self.set_state(VoiceState.SPEAKING, "Speaking…"))
+        self.root.after(3800, lambda: self.set_state(VoiceState.IDLE, "Ready."))
 
     def _send(self) -> None:
         text = self.entry.get().strip()
         if not text:
             return
         self.entry.delete(0, tk.END)
-        self._append("You", text, "you")
-        self.set_state(VoiceState.THINKING)
+        self.set_state(VoiceState.THINKING, "Thinking…")
         self.root.update_idletasks()
         try:
             reply = self.on_submit(text)
         except Exception as e:  # noqa: BLE001
-            self.set_state(VoiceState.ERROR, str(e))
-            self._append("Jarvis", f"Something went wrong: {e}", "jarvis")
-            self.root.after(800, lambda: self.set_state(VoiceState.IDLE))
+            self.set_state(VoiceState.ERROR, f"Error: {e}")
+            self.root.after(1200, lambda: self.set_state(VoiceState.IDLE, "Ready."))
             return
-        self.set_state(VoiceState.SPEAKING)
-        self._append("Jarvis", reply or "(no reply)", "jarvis")
-        self.root.after(500, lambda: self.set_state(VoiceState.IDLE))
+        self.set_state(VoiceState.SPEAKING, reply or "")
+        self.root.after(900, lambda: self.set_state(VoiceState.IDLE, reply or "Ready."))
+
+    def _tick(self) -> None:
+        speed = {
+            VoiceState.IDLE: 0.04,
+            VoiceState.LISTENING: 0.22,
+            VoiceState.THINKING: 0.12,
+            VoiceState.SPEAKING: 0.28,
+            VoiceState.ERROR: 0.06,
+        }.get(self.state, 0.05)
+        self._t += speed
+        self._draw()
+        self.root.after(33, self._tick)
+
+    def _draw(self) -> None:
+        c = self.canvas
+        c.delete("all")
+        w = max(c.winfo_width(), 2)
+        h = max(c.winfo_height(), 2)
+
+        # subtle grid
+        step = 40
+        for x in range(0, w, step):
+            c.create_line(x, 0, x, h, fill="#12202a")
+        for y in range(0, h, step):
+            c.create_line(0, y, w, y, fill="#12202a")
+
+        cx, cy = w // 2, int(h * 0.42)
+        # prefer reference image if available
+        if getattr(self, "_base_img", None) is not None:
+            img = self._base_img
+            self._photo = img  # keep reference
+            c.create_image(cx, cy, image=img)
+            # light animated arcs over the art
+            self._draw_overlay_arcs(c, cx, cy, base_r=min(w, h) * 0.18)
+        else:
+            self._draw_rings(c, cx, cy, base_r=min(w, h) * 0.22)
+
+    def _draw_rings(self, c: tk.Canvas, cx: int, cy: int, base_r: float) -> None:
+        t = self._t
+        pulse = 1.0
+        if self.state == VoiceState.LISTENING:
+            pulse = 1.0 + 0.06 * math.sin(t * 3)
+        elif self.state == VoiceState.SPEAKING:
+            pulse = 1.0 + 0.08 * math.sin(t * 5)
+        elif self.state == VoiceState.THINKING:
+            pulse = 1.0 + 0.03 * math.sin(t * 2)
+
+        # outer glow
+        for i, mul in enumerate((1.55, 1.35, 1.18)):
+            r = base_r * mul * pulse
+            color = CYAN if i == 0 else CYAN_DIM
+            c.create_oval(cx - r, cy - r, cx + r, cy + r, outline=color, width=2)
+
+        # tick ring
+        r_tick = base_r * 1.05 * pulse
+        for i in range(60):
+            ang = math.radians(i * 6 + (t * 20 if self.state != VoiceState.IDLE else 0))
+            x0 = cx + r_tick * math.cos(ang)
+            y0 = cy + r_tick * math.sin(ang)
+            x1 = cx + (r_tick - 6) * math.cos(ang)
+            y1 = cy + (r_tick - 6) * math.sin(ang)
+            c.create_line(x0, y0, x1, y1, fill=CYAN_DIM)
+
+        # segmented arcs (rotate when active)
+        rot = t * (80 if self.state in {VoiceState.LISTENING, VoiceState.SPEAKING} else 12)
+        r_seg = base_r * 1.25 * pulse
+        for start, extent in ((rot, 40), (rot + 90, 55), (rot + 200, 35), (rot + 280, 50)):
+            c.create_arc(
+                cx - r_seg,
+                cy - r_seg,
+                cx + r_seg,
+                cy + r_seg,
+                start=start,
+                extent=extent,
+                style=tk.ARC,
+                outline=CYAN,
+                width=6,
+            )
+
+        # inner rings
+        for mul in (0.55, 0.35):
+            r = base_r * mul
+            c.create_oval(cx - r, cy - r, cx + r, cy + r, outline=CYAN, width=2)
+
+        # core
+        core = base_r * 0.18
+        c.create_oval(cx - core, cy - core, cx + core, cy + core, outline=CYAN_DIM, width=1)
 
     def run(self) -> None:
         self.root.mainloop()

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from assistant.actions.router import ActionRequest, ActionRouter
+from assistant.llm.builtins import chat_reply, try_builtin
 from assistant.llm.intent import Intent, parse_intent
 from assistant.memory.store import MemoryStore
 from assistant.ui.orb import ListeningOrb
@@ -39,6 +40,7 @@ class Orchestrator:
         self.tts = tts or MockTTS()
         self.stt = stt
         self.pending: dict[str, Any] | None = None
+        self._history: list[tuple[str, str]] = []
         self.voice.set_hooks(
             on_change=lambda s: self.orb.update(
                 s, vu=self.voice.level, error=self.voice.last_error
@@ -64,9 +66,11 @@ class Orchestrator:
                 TurnResult(reply=intent.reply or "Please clarify.", intent=intent)
             )
         if intent.kind == "chat":
-            return self._speak_result(
-                TurnResult(reply=intent.reply or "", intent=intent)
-            )
+            text = intent.params.get("text") or intent.reply or ""
+            reply = chat_reply(text, history=getattr(self, "_history", None))
+            self._remember_turn("user", text)
+            self._remember_turn("assistant", reply)
+            return self._speak_result(TurnResult(reply=reply, intent=intent))
         if intent.kind == "teach":
             if not confirmed:
                 self.pending = {"type": "teach", "intent": intent}
@@ -179,7 +183,21 @@ class Orchestrator:
         skill_turn = self.try_skill(text, confirmed=confirmed)
         if skill_turn:
             return skill_turn
+
+        builtin = try_builtin(text)
+        if builtin is not None:
+            self._remember_turn("user", text)
+            self._remember_turn("assistant", builtin)
+            return self._speak_result(
+                TurnResult(reply=builtin, intent=Intent("chat", reply=builtin))
+            )
         return self.handle_text(text, confirmed=confirmed)
+
+    def _remember_turn(self, role: str, content: str) -> None:
+        if not hasattr(self, "_history") or self._history is None:
+            self._history: list[tuple[str, str]] = []
+        self._history.append((role, content))
+        self._history = self._history[-12:]
 
     def _flush_pending(self, *, confirm: bool) -> TurnResult:
         pending = self.pending

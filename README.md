@@ -67,6 +67,8 @@ See `config.yaml` for apps, folder roots, and timeouts.
 `pytest` covers memory, router, voice state machine, and orchestrator confirm gates.  
 `python -m assistant scenarios` runs the reliability scenario pack (must be all PASS).
 
+**Before every push:** `python scripts/preflight.py` (self-method AST check + pytest + scenarios + compileall). Must print `PREFLIGHT PASSED`.
+
 
 ## Plex library import (local files only)
 

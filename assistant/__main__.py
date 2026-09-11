@@ -91,6 +91,12 @@ def gui_loop() -> None:
     if always:
         wake = WakeListener(config=WakeConfig(wake_name=str(wake_name)), hear=hear)
 
+        def _mic_err(msg: str) -> None:
+            # Surfaced via wake on_state mic_denied + GUI caption path
+            pass
+
+        wake.on_error = _mic_err
+
     run_gui(
         title=name,
         on_submit=on_submit,

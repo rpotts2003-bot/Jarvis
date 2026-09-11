@@ -101,6 +101,9 @@ Jarvis listens in the background and **only responds after you say its name** (`
 
 Typing still works if the mic packages are missing.
 
+Mute is app-level (stops wake/STT feed) and persists in `%USERPROFILE%\.jarvis\ui_prefs.json`. Windows mic privacy / OS mute shows an error on the HUD instead of failing silently.
+
+
 ## OpenAI free-form chat
 
 Built-ins and PC actions work offline. For free-form conversation:

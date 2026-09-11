@@ -132,6 +132,7 @@ def make_tts() -> TTSAdapter:
 
 
 def make_mic_hear(
+
     *,
     on_level: Callable[[float], None] | None = None,
 ) -> Callable[[], str | None] | None:

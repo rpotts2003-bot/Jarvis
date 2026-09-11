@@ -58,6 +58,7 @@ class JarvisWindow:
         self._base_img = None
         self.rings = RingTiming()
         self._demo_job: str | None = None
+        self._mic_muted = False
 
         self.root = tk.Tk()
         self.root.title(title)
@@ -144,6 +145,8 @@ class JarvisWindow:
             self.wake.on_command = self._queue_command
             self.wake.on_state = self._on_wake_state
             self.wake.start()
+            if self.wake.muted:
+                self._apply_mute_chrome(True)
             if self.wake.hear is None:
                 self.caption.configure(
                     text=(status_hint or "")
@@ -192,26 +195,50 @@ class JarvisWindow:
             self.caption.configure(text="Voice not active — typing still works.")
             return
         muted = self.wake.toggle_mute()
-        self.mute_btn.configure(text="🔇 Muted" if muted else "🎤 Mute")
-        if muted:
-            self.set_state(VoiceState.IDLE, "Mic muted — tap Mute again to listen for Jarvis.")
-        else:
-            self.set_state(VoiceState.LISTENING, "Listening for Jarvis…", level=0.2)
+        self._apply_mute_chrome(muted)
 
     def _queue_command(self, cmd: str) -> None:
         self._cmd_q.put(cmd)
 
+    def _apply_mute_chrome(self, muted: bool) -> None:
+        self._mic_muted = muted
+        if muted:
+            self.mute_btn.configure(text="🔇 Muted", fg="#78909c")
+            self.set_state(VoiceState.IDLE, "Mic muted — tap Mute to arm wake.", barge_in=False)
+            self.state_label.configure(text="muted")
+            # Static desaturated rings (no listen pulse)
+            self.rings.reduced_motion = True
+        else:
+            self.mute_btn.configure(text="🎤 Mute", fg=CYAN)
+            import os
+            self.rings.reduced_motion = os.environ.get("JARVIS_REDUCED_MOTION", "").lower() in {
+                "1", "true", "yes"
+            }
+            self.set_state(VoiceState.IDLE, "Listening for Jarvis…")
+            self.state_label.configure(text="idle · wake armed")
+
     def _on_wake_state(self, state: str) -> None:
         def apply() -> None:
-            if state == "muted":
-                self.state_label.configure(text="muted")
-            elif state == "listening":
-                self.set_state(VoiceState.LISTENING, level=0.15)
-                self.state_label.configure(text="listening for wake")
+            if state in {"muted"}:
+                self._apply_mute_chrome(True)
+            elif state in {"idle_armed", "idle"}:
+                if not self._mic_muted:
+                    self.set_state(VoiceState.IDLE, "Listening for Jarvis…")
+                    self.state_label.configure(text="idle · wake armed")
             elif state == "wake":
                 self.set_state(VoiceState.LISTENING, "Heard Jarvis…", level=0.5)
-            elif state == "idle":
-                self.state_label.configure(text="idle")
+            elif state == "listening":
+                self.set_state(VoiceState.LISTENING, level=0.2)
+            elif state == "busy":
+                self.set_state(VoiceState.THINKING)
+            elif state == "idle_timeout":
+                self.set_state(VoiceState.IDLE, "Say Jarvis… then your command.")
+            elif state == "mic_denied":
+                self.set_state(
+                    VoiceState.ERROR,
+                    "Microphone denied or muted in Windows — enable mic privacy, then unmute here.",
+                )
+                self.state_label.configure(text="mic denied")
         try:
             self.root.after(0, apply)
         except Exception:
@@ -227,6 +254,8 @@ class JarvisWindow:
         self.root.after(100, self._poll_commands)
 
     def _handle_voice_command(self, cmd: str) -> None:
+        if self.wake is not None:
+            self.wake.set_busy(True)
         self.set_state(VoiceState.THINKING, f"You: {cmd}")
         self.root.update_idletasks()
         try:
@@ -240,10 +269,13 @@ class JarvisWindow:
                 self.speak(reply or "")
             except Exception:
                 pass
-        self.root.after(
-            200,
-            lambda: self.set_state(VoiceState.LISTENING, "Listening for Jarvis…", level=0.2),
-        )
+        def _done() -> None:
+            if self.wake is not None:
+                self.wake.set_busy(False)
+            self.set_state(VoiceState.IDLE, "Listening for Jarvis…")
+            self.state_label.configure(text="idle · wake armed")
+
+        self.root.after(200, _done)
 
     def _on_close(self) -> None:
         if self.wake is not None:

@@ -90,6 +90,9 @@ Confirm copy MyMovie.mp4 into Plex library?
 
 ## Voice (always listening)
 
+Speech uses **free Windows British male TTS** when available (prefers *George* / `en-GB` male), with a calmer rate (~145) so it feels more like MCU Jarvis’s *manner* — not a celebrity voice clone. Tune in `config.yaml` under `voice:` or `JARVIS_TTS_RATE` / `JARVIS_TTS_VOICE` in `.env`.
+
+
 Jarvis listens in the background and **only responds after you say its name** (`Jarvis` by default). Use the **Mute** button on the HUD to silence the mic.
 
 1. Run `Setup Voice.bat` once (installs mic/TTS packages; PyAudio can be fiddly on Windows).

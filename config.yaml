@@ -30,3 +30,9 @@ plex:
   # Optional later: Plex token for auto-scan via local API
   # token: ""
   # base_url: http://127.0.0.1:32400
+
+# Free Windows TTS — British male, measured pace (Jarvis manner, not a clone)
+voice:
+  rate: 145          # pyttsx3; ~200 default, lower = calmer
+  volume: 0.92
+  voice_hint: ""     # optional substring, e.g. George

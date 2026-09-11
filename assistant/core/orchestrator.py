@@ -6,6 +6,7 @@ from typing import Any
 
 from assistant.actions.router import ActionRequest, ActionRouter
 from assistant.llm.builtins import chat_reply, try_builtin
+from assistant.skills.runner import try_registry_skill
 from assistant.llm.intent import Intent, parse_intent
 from assistant.memory.store import MemoryStore
 from assistant.ui.orb import ListeningOrb
@@ -180,6 +181,11 @@ class Orchestrator:
         return self.handle_text(skill.value, confirmed=confirmed)
 
     def handle_utterance(self, text: str, *, confirmed: bool = False) -> TurnResult:
+        # Built-in skill registry (Agent Brain pack) before taught skills / chat
+        reg = try_registry_skill(self, text, confirmed=confirmed)
+        if reg is not None:
+            return reg
+
         skill_turn = self.try_skill(text, confirmed=confirmed)
         if skill_turn:
             return skill_turn

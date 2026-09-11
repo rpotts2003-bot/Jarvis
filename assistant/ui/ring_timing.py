@@ -45,14 +45,17 @@ class RingTiming:
             self.state == VoiceState.SPEAKING
             and state in {VoiceState.LISTENING, VoiceState.IDLE}
         )
-        # Listening → Thinking: schedule VU kill window
+        # Listening → Thinking: kill VU same frame + kill window (Voice UI guard)
         if self.state == VoiceState.LISTENING and state == VoiceState.THINKING:
             self._vu_kill_until = _now() + VU_KILL_MS / 1000.0
-            self._raw_level = 0.0
+            self.set_level(0.0)
+            self._smooth = 0.0
+        # Barge-in / hard cut: zero level same frame so last sample can't ghost-pulse
+        if self._hard_cut:
+            self.set_level(0.0)
+            self._smooth = 0.0 if state != VoiceState.LISTENING else 0.15
         self.state = state
         self._entered_at = _now()
-        if self._hard_cut:
-            self._smooth = 0.0 if state != VoiceState.LISTENING else max(self._smooth, 0.15)
 
     def set_level(self, level: float) -> None:
         """Mic VU (listening) or TTS envelope (speaking). Ignored in Thinking after kill."""

@@ -127,17 +127,20 @@ class JarvisWindow:
         self._tick()
 
     def _load_hud_image(self) -> None:
-        path = _asset("hud_orb.png")
-        self._hud_path = path
+        # Prefer circular composite on canvas BG (no black box). Else skip image.
         self._photo = None
         self._base_img = None
-        if path is None:
-            return
-        try:
-            self._base_img = tk.PhotoImage(file=str(path))
-        except tk.TclError:
-            self._base_img = None
-
+        self._hud_path = None
+        for name in ("hud_orb_tk.png", "hud_orb.png"):
+            path = _asset(name)
+            if path is None:
+                continue
+            try:
+                self._base_img = tk.PhotoImage(file=str(path))
+                self._hud_path = path
+                break
+            except tk.TclError:
+                self._base_img = None
     def set_state(
         self,
         state: VoiceState,

@@ -113,3 +113,15 @@ Built-ins and PC actions work offline. For free-form conversation:
 3. Restart Jarvis — status should show `chat:OpenAI`.
 
 Set `JARVIS_CLOUD_CHAT=0` to force offline chat replies even if a key is present.
+
+
+## Setup script
+
+```powershell
+.\setup.ps1
+# or skip mic probe:
+.\setup.ps1 -SkipMic
+```
+
+Exits non-zero with a plain English blocker if the microphone check fails.
+Say `diagnose` or `test mic` anytime, or use **Test mic** on the HUD.

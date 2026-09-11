@@ -36,6 +36,7 @@ def test_seed_has_core_builtins():
         "plex_scan_reminder",
         "remember_that",
         "forget_that",
+        "diagnose_mic",
     }:
         assert need in ids
 

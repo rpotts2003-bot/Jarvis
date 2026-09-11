@@ -151,6 +151,17 @@ _BUILTIN: list[Skill] = [
         ),
     ),
     Skill(
+        id="diagnose_mic",
+        triggers=[
+            r"^\s*diagnose(\s+mic(rophone)?)?\s*$",
+            r"^\s*test(\s+my)?\s+mic(rophone)?\s*$",
+            r"^\s*mic(\s+check|\s+test)?\s*$",
+        ],
+        kind="reply",
+        description="Probe microphone and show fix hints",
+        reply_template="__DIAGNOSE_MIC__",
+    ),
+    Skill(
         id="remember_that",
         triggers=[
             r"^\s*remember\s+that\b.+$",

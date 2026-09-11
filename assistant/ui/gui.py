@@ -135,6 +135,21 @@ class JarvisWindow:
         )
         self.mute_btn.pack(side=tk.LEFT)
 
+        self.test_mic_btn = tk.Button(
+            bar,
+            text="Test mic",
+            command=self._test_mic,
+            bg="#102027",
+            fg=CYAN_DIM,
+            activebackground="#1a333d",
+            activeforeground=CYAN,
+            relief=tk.FLAT,
+            padx=10,
+            pady=8,
+            font=("Segoe UI", 9),
+        )
+        self.test_mic_btn.pack(side=tk.LEFT, padx=(8, 0))
+
         self.root.bind("<Configure>", lambda _e: self._draw())
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._load_hud_image()
@@ -150,8 +165,9 @@ class JarvisWindow:
             if self.wake.hear is None:
                 self.caption.configure(
                     text=(status_hint or "")
-                    + " — mic libs missing; type for now. Run Setup Voice.bat"
+                    + " — mic libs missing; type for now. Run setup.ps1"
                 )
+        self.root.after(400, self._maybe_first_mic_probe)
 
     def _load_hud_image(self) -> None:
         # Prefer circular composite on canvas BG (no black box). Else skip image.
@@ -189,6 +205,45 @@ class JarvisWindow:
         # best-effort cancel pending after() callbacks by generation
         self._demo_gen = getattr(self, "_demo_gen", 0) + 1
 
+
+
+    def _maybe_first_mic_probe(self) -> None:
+        try:
+            from assistant.voice.mic_health import (
+                mark_probed,
+                needs_first_run_probe,
+                probe_microphone,
+            )
+        except Exception:
+            return
+        if not needs_first_run_probe():
+            return
+        result = probe_microphone()
+        mark_probed(status=result.status.value)
+        if result.ok:
+            return
+        self._show_mic_panel(result.message)
+
+    def _show_mic_panel(self, message: str) -> None:
+        self.set_state(VoiceState.ERROR, message)
+        self.state_label.configure(text="mic check")
+        self.test_mic_btn.configure(fg=CYAN)
+
+    def _test_mic(self) -> None:
+        from assistant.voice.mic_health import mark_probed, probe_microphone
+
+        result = probe_microphone()
+        mark_probed(status=result.status.value)
+        if result.ok:
+            self.set_state(VoiceState.IDLE, "Microphone OK.")
+            self.state_label.configure(text="mic ok")
+            if self.speak:
+                try:
+                    self.speak("Microphone OK.")
+                except Exception:
+                    pass
+        else:
+            self._show_mic_panel(result.message)
 
     def _toggle_mute(self) -> None:
         if self.wake is None:

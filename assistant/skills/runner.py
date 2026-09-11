@@ -66,6 +66,12 @@ def try_registry_skill(
         elif skill.id == "help":
             taught = [s.key for s in orch.memory.list_tier("skill")]
             reply = _help_reply(taught)
+        elif skill.id == "diagnose_mic" or skill.reply_template == "__DIAGNOSE_MIC__":
+            from assistant.voice.mic_health import mark_probed, probe_microphone
+
+            result = probe_microphone()
+            mark_probed(status=result.status.value)
+            reply = "Microphone OK." if result.ok else (result.message + " You can also run setup.ps1.")
         elif skill.reply_template:
             reply = skill.reply_template
         else:

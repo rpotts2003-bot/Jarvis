@@ -1,4 +1,6 @@
 assistant_name: Jarvis
+wake_name: Jarvis
+always_listen: true
 silence_timeout_ms: 5000
 stt_hang_timeout_ms: 10000
 min_utterance_ms: 300

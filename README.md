@@ -86,3 +86,24 @@ Confirm copy MyMovie.mp4 into Plex library?
 > yes
 > scan plex
 ```
+
+
+## Voice (always listening)
+
+Jarvis listens in the background and **only responds after you say its name** (`Jarvis` by default). Use the **Mute** button on the HUD to silence the mic.
+
+1. Run `Setup Voice.bat` once (installs mic/TTS packages; PyAudio can be fiddly on Windows).
+2. Allow mic access if Windows asks.
+3. Say: `Jarvis, what time is it?`
+
+Typing still works if the mic packages are missing.
+
+## OpenAI free-form chat
+
+Built-ins and PC actions work offline. For free-form conversation:
+
+1. Copy `.env.example` to `.env` (Start Jarvis.bat does this once).
+2. Put your key in `OPENAI_API_KEY=...`
+3. Restart Jarvis — status should show `chat:OpenAI`.
+
+Set `JARVIS_CLOUD_CHAT=0` to force offline chat replies even if a key is present.

@@ -7,9 +7,11 @@ import sys
 import tkinter as tk
 from pathlib import Path
 from typing import Callable
+import queue
 
 from assistant.ui.ring_timing import RingTiming
 from assistant.voice.state_machine import VoiceState
+from assistant.voice.wake import WakeListener
 
 CYAN = "#00e5ff"
 CYAN_DIM = "#00838f"
@@ -37,8 +39,19 @@ def _hex_brightness(hex_color: str, factor: float) -> str:
 
 
 class JarvisWindow:
-    def __init__(self, *, title: str, on_submit: Callable[[str], str]):
+    def __init__(
+        self,
+        *,
+        title: str,
+        on_submit: Callable[[str], str],
+        wake: WakeListener | None = None,
+        status_hint: str = "",
+        speak: Callable[[str], None] | None = None,
+    ):
         self.on_submit = on_submit
+        self.wake = wake
+        self.speak = speak
+        self._cmd_q: queue.Queue[str] = queue.Queue()
         self.state = VoiceState.IDLE
         self._t = 0.0
         self._photo = None
@@ -70,7 +83,7 @@ class JarvisWindow:
 
         self.caption = tk.Label(
             self.root,
-            text="Ready — type below or Hold to preview listen/speak",
+            text=status_hint or "Say Jarvis… then your command — or type below",
             fg="#b0bec5",
             bg=BG,
             font=("Segoe UI", 11),
@@ -106,10 +119,10 @@ class JarvisWindow:
         self.entry.bind("<Return>", lambda _e: self._send())
         self.entry.focus_set()
 
-        self.listen_btn = tk.Button(
+        self.mute_btn = tk.Button(
             bar,
-            text="● Hold",
-            command=self._pulse_listen,
+            text="🎤 Mute",
+            command=self._toggle_mute,
             bg="#102027",
             fg=CYAN,
             activebackground="#1a333d",
@@ -119,12 +132,23 @@ class JarvisWindow:
             pady=8,
             font=("Segoe UI", 10, "bold"),
         )
-        self.listen_btn.pack(side=tk.LEFT)
+        self.mute_btn.pack(side=tk.LEFT)
 
         self.root.bind("<Configure>", lambda _e: self._draw())
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._load_hud_image()
         self._draw()
         self._tick()
+        self._poll_commands()
+        if self.wake is not None:
+            self.wake.on_command = self._queue_command
+            self.wake.on_state = self._on_wake_state
+            self.wake.start()
+            if self.wake.hear is None:
+                self.caption.configure(
+                    text=(status_hint or "")
+                    + " — mic libs missing; type for now. Run Setup Voice.bat"
+                )
 
     def _load_hud_image(self) -> None:
         # Prefer circular composite on canvas BG (no black box). Else skip image.
@@ -161,6 +185,70 @@ class JarvisWindow:
     def _cancel_demo(self) -> None:
         # best-effort cancel pending after() callbacks by generation
         self._demo_gen = getattr(self, "_demo_gen", 0) + 1
+
+
+    def _toggle_mute(self) -> None:
+        if self.wake is None:
+            self.caption.configure(text="Voice not active — typing still works.")
+            return
+        muted = self.wake.toggle_mute()
+        self.mute_btn.configure(text="🔇 Muted" if muted else "🎤 Mute")
+        if muted:
+            self.set_state(VoiceState.IDLE, "Mic muted — tap Mute again to listen for Jarvis.")
+        else:
+            self.set_state(VoiceState.LISTENING, "Listening for Jarvis…", level=0.2)
+
+    def _queue_command(self, cmd: str) -> None:
+        self._cmd_q.put(cmd)
+
+    def _on_wake_state(self, state: str) -> None:
+        def apply() -> None:
+            if state == "muted":
+                self.state_label.configure(text="muted")
+            elif state == "listening":
+                self.set_state(VoiceState.LISTENING, level=0.15)
+                self.state_label.configure(text="listening for wake")
+            elif state == "wake":
+                self.set_state(VoiceState.LISTENING, "Heard Jarvis…", level=0.5)
+            elif state == "idle":
+                self.state_label.configure(text="idle")
+        try:
+            self.root.after(0, apply)
+        except Exception:
+            pass
+
+    def _poll_commands(self) -> None:
+        try:
+            while True:
+                cmd = self._cmd_q.get_nowait()
+                self._handle_voice_command(cmd)
+        except queue.Empty:
+            pass
+        self.root.after(100, self._poll_commands)
+
+    def _handle_voice_command(self, cmd: str) -> None:
+        self.set_state(VoiceState.THINKING, f"You: {cmd}")
+        self.root.update_idletasks()
+        try:
+            reply = self.on_submit(cmd)
+        except Exception as e:  # noqa: BLE001
+            self.set_state(VoiceState.ERROR, f"Error: {e}")
+            return
+        self.set_state(VoiceState.SPEAKING, reply or "", level=0.55)
+        if self.speak:
+            try:
+                self.speak(reply or "")
+            except Exception:
+                pass
+        self.root.after(
+            200,
+            lambda: self.set_state(VoiceState.LISTENING, "Listening for Jarvis…", level=0.2),
+        )
+
+    def _on_close(self) -> None:
+        if self.wake is not None:
+            self.wake.stop()
+        self.root.destroy()
 
     def _pulse_listen(self) -> None:
         """Demo state machine with synthetic VU / TTS envelope."""
@@ -205,10 +293,14 @@ class JarvisWindow:
             self.root.after(1200, lambda: self.set_state(VoiceState.IDLE, "Ready."))
             return
         self.set_state(VoiceState.SPEAKING, reply or "", level=0.55)
-        # fake short TTS envelope then idle
         self.root.after(200, lambda: self.rings.set_level(0.8))
         self.root.after(450, lambda: self.rings.set_level(0.35))
-        self.root.after(900, lambda: self.set_state(VoiceState.IDLE, reply or "Ready."))
+        if self.speak:
+            try:
+                self.speak(reply or "")
+            except Exception:
+                pass
+        self.root.after(200, lambda: self.set_state(VoiceState.IDLE, reply or "Ready."))
 
     def _tick(self) -> None:
         drive = self.rings.tick()
@@ -342,5 +434,18 @@ class JarvisWindow:
         self.root.mainloop()
 
 
-def run_gui(*, title: str, on_submit: Callable[[str], str]) -> None:
-    JarvisWindow(title=title, on_submit=on_submit).run()
+def run_gui(
+    *,
+    title: str,
+    on_submit: Callable[[str], str],
+    wake: WakeListener | None = None,
+    status_hint: str = "",
+    speak: Callable[[str], None] | None = None,
+) -> None:
+    JarvisWindow(
+        title=title,
+        on_submit=on_submit,
+        wake=wake,
+        status_hint=status_hint,
+        speak=speak,
+    ).run()

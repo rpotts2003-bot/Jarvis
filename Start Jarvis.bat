@@ -9,10 +9,15 @@ if not exist .venv (
 ) else (
   call .venv\Scripts\activate
 )
+if not exist .env if exist .env.example (
+  copy /Y .env.example .env >nul
+  echo Created .env — add OPENAI_API_KEY there for free-form chat.
+)
 echo Starting Jarvis window...
 python -m assistant gui
 if errorlevel 1 (
   echo.
   echo If you saw a tkinter error, reinstall Python from python.org and tick "tcl/tk".
+  echo For mic listening, run Setup Voice.bat once.
   pause
 )

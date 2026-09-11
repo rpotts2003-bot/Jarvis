@@ -61,8 +61,9 @@ def try_builtin(text: str, *, open_app: Callable[[str], str] | None = None) -> s
 
 def chat_reply(text: str, *, history: list[tuple[str, str]] | None = None) -> str:
     """Free-form chat. Uses OpenAI-compatible API if OPENAI_API_KEY is set; else offline fallback."""
+    from assistant.envload import cloud_chat_enabled
     key = os.environ.get("OPENAI_API_KEY", "").strip()
-    if not key:
+    if not cloud_chat_enabled() or not key:
         return (
             "I understood you, but I need an API key for free-form chat. "
             "Set OPENAI_API_KEY in your environment (or .env), or ask me something built-in "

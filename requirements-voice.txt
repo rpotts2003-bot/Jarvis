@@ -1,0 +1,9 @@
+# Optional — always-listen mic + TTS on Windows
+SpeechRecognition>=3.10
+pyttsx3>=2.90
+# PyAudio is required for the microphone. On Windows try:
+#   pip install pipwin
+#   pipwin install pyaudio
+# Or download a matching wheel from https://example (unofficial) / use conda.
+PyAudio>=0.2.13
+openai-whisper>=20231117

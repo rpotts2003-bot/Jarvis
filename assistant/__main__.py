@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
 from assistant.actions.router import ActionRouter
+from assistant.envload import cloud_chat_enabled, load_env
 from assistant.config import expand_roots, load_config, user_data_dir
 from assistant.core.orchestrator import Orchestrator
 from assistant.memory.store import MemoryStore
@@ -12,6 +14,7 @@ from assistant.scenarios import run_scenarios
 
 
 def build_orchestrator(data_dir: Path) -> Orchestrator:
+    load_env()
     cfg = load_config()
     allow = cfg.get("allowlist", {})
     perms = cfg.get("permissions", {})
@@ -57,15 +60,45 @@ def chat_loop() -> None:
 
 def gui_loop() -> None:
     from assistant.ui.gui import run_gui
+    from assistant.voice.platform_io import make_mic_hear, make_tts
+    from assistant.voice.wake import WakeConfig, WakeListener
 
+    load_env()
     data = user_data_dir()
     orch = build_orchestrator(data)
-    name = load_config().get("assistant_name", "Jarvis")
+    cfg = load_config()
+    name = str(cfg.get("assistant_name", "Jarvis"))
+    wake_name = os.environ.get("JARVIS_WAKE_NAME") or name
+    always = os.environ.get("JARVIS_ALWAYS_LISTEN", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+    tts = make_tts()
+    orch.tts = tts
 
     def on_submit(text: str) -> str:
-        return orch.handle_utterance(text).reply or ""
+        turn = orch.handle_utterance(text)
+        return turn.reply or ""
 
-    run_gui(title=name, on_submit=on_submit)
+    status_bits = ["chat:OpenAI" if cloud_chat_enabled() else "chat:offline"]
+    hear = make_mic_hear() if always else None
+    status_bits.append("mic:on" if hear else "mic:type-only (install voice deps)")
+
+    wake = None
+    if always:
+        wake = WakeListener(config=WakeConfig(wake_name=str(wake_name)), hear=hear)
+
+    run_gui(
+        title=name,
+        on_submit=on_submit,
+        wake=wake,
+        status_hint=" · ".join(status_bits),
+        speak=tts.speak,
+    )
+
 
 
 def main(argv: list[str] | None = None) -> None:

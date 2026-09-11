@@ -107,6 +107,65 @@ def gui_loop() -> None:
 
 
 
+def _diagnose_report_paths() -> list[Path]:
+    paths: list[Path] = []
+    if getattr(sys, "frozen", False):
+        paths.append(Path(sys.executable).resolve().parent / "jarvis_diagnose.txt")
+    paths.append(user_data_dir() / "jarvis_diagnose.txt")
+    paths.append(Path.cwd() / "jarvis_diagnose.txt")
+    out: list[Path] = []
+    seen: set[str] = set()
+    for path in paths:
+        key = str(path)
+        if key not in seen:
+            seen.add(key)
+            out.append(path)
+    return out
+
+
+def _run_diagnose() -> int:
+    """Mic/TTS health check. Writes jarvis_diagnose.txt for windowed exe smoke."""
+    from assistant.voice.mic_health import mark_probed, probe_microphone
+    from assistant.voice.platform_io import make_tts
+
+    load_env()
+    lines: list[str] = []
+    code = 0
+    try:
+        result = probe_microphone()
+        mark_probed(status=result.status.value)
+        lines.append(f"mic: {result.status.value}")
+        lines.append(result.message)
+        try:
+            make_tts().speak("")
+            lines.append("tts: ok")
+        except Exception as e:
+            lines.append(f"tts: fail ({e})")
+            code = 1
+        else:
+            if result.status.value == "missing_dep":
+                code = 2
+            elif not result.ok:
+                code = 3
+    except Exception as e:
+        lines.append(f"crash: {e}")
+        code = 1
+
+    lines.append(f"exit: {code}")
+    text = "\n".join(lines) + "\n"
+    for path in _diagnose_report_paths():
+        try:
+            path.write_text(text, encoding="utf-8")
+        except Exception:
+            pass
+    try:
+        print(text, end="")
+    except Exception:
+        pass
+    return code
+
+
+
 def main(argv: list[str] | None = None) -> None:
     # Double-click / no args → GUI window
     if argv is None and len(sys.argv) == 1:
@@ -127,25 +186,7 @@ def main(argv: list[str] | None = None) -> None:
     elif cmd == "scenarios":
         raise SystemExit(0 if run_scenarios() else 1)
     elif cmd == "diagnose":
-        from assistant.voice.mic_health import mark_probed, probe_microphone
-        from assistant.voice.platform_io import make_tts
-
-        load_env()
-        result = probe_microphone()
-        mark_probed(status=result.status.value)
-        print(f"mic: {result.status.value}")
-        print(result.message)
-        # TTS must not crash
-        try:
-            make_tts().speak("")  # no-op empty
-            print("tts: ok")
-        except Exception as e:
-            print(f"tts: fail ({e})")
-            raise SystemExit(1)
-        # missing_dep is a packaging failure for frozen voice builds
-        if result.status.value == "missing_dep":
-            raise SystemExit(2)
-        raise SystemExit(0 if result.ok else 3)
+        raise SystemExit(_run_diagnose())
 
 
 if __name__ == "__main__":

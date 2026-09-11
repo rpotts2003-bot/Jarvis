@@ -1,13 +1,13 @@
 @echo off
-setlocal
+setlocal EnableExtensions
 title Build Jarvis.exe
 cd /d "%~dp0"
+
 echo === Jarvis Windows one-file build ===
 
 where python >nul 2>&1
 if errorlevel 1 (
-  echo BUILD FAILED: Python not found. Install from python.org ^(Add to PATH + tcl/tk^).
-  pause
+  echo Build stopped: Python not found. Install from python.org ^(Add to PATH + tcl/tk^).
   exit /b 1
 )
 
@@ -15,70 +15,77 @@ if not exist .venv (
   echo Creating .venv...
   python -m venv .venv
   if errorlevel 1 (
-    echo BUILD FAILED: could not create venv
-    pause
+    echo Build stopped: could not create venv.
     exit /b 1
   )
 )
 call .venv\Scripts\activate
-
-echo Installing core + build deps...
-python -m pip install -U pip
-pip install -r requirements.txt -r requirements-build.txt
 if errorlevel 1 (
-  echo BUILD FAILED: core pip install
-  pause
+  echo Build stopped: could not activate venv.
   exit /b 1
 )
 
-echo Installing voice deps ^(needed inside the exe^)...
+echo Installing core + build deps...
+python -m pip install -U pip
+if errorlevel 1 (
+  echo Build stopped: pip upgrade failed.
+  exit /b 1
+)
+pip install -r requirements.txt -r requirements-build.txt
+if errorlevel 1 (
+  echo Build stopped: core pip install failed.
+  exit /b 1
+)
+
+echo Installing voice deps ^(required inside the exe^)...
 pip install -r requirements-voice.txt
 if errorlevel 1 (
-  echo WARNING: voice pip failed. Trying pipwin for PyAudio...
+  echo Voice pip failed — trying pipwin for PyAudio...
   pip install pipwin
   pipwin install pyaudio
+  if errorlevel 1 (
+    echo Build stopped: voice packages failed. Fix PyAudio, then re-run.
+    exit /b 1
+  )
 )
 
 echo Running preflight...
 python scripts\preflight.py
 if errorlevel 1 (
-  echo BUILD FAILED: preflight
-  pause
+  echo Build stopped: preflight failed.
   exit /b 1
 )
 
 echo Freezing with PyInstaller...
 python -m PyInstaller --noconfirm jarvis.spec
 if errorlevel 1 (
-  echo BUILD FAILED: PyInstaller
-  pause
+  echo Build stopped: PyInstaller failed.
   exit /b 1
 )
 
 if not exist dist\Jarvis.exe (
-  echo BUILD FAILED: dist\Jarvis.exe missing
-  pause
+  echo Build stopped: dist\Jarvis.exe was not created.
   exit /b 1
 )
 
-if exist .env.example copy /Y .env.example dist\.env.example >nul
+copy /Y .env.example dist\.env.example >nul
+if errorlevel 1 (
+  echo Build stopped: could not copy .env.example beside the exe.
+  exit /b 1
+)
+if not exist dist\.env.example (
+  echo Build stopped: dist\.env.example missing.
+  exit /b 1
+)
 if exist VERSION copy /Y VERSION dist\VERSION >nul
 
-echo Running post-build smoke ^(diagnose^)...
+echo Running post-build smoke against dist\Jarvis.exe...
 python scripts\smoke_exe.py --exe dist\Jarvis.exe
-set SMOKE=%ERRORLEVEL%
-if not "%SMOKE%"=="0" (
-  echo.
-  echo BUILD WARNING: smoke did not fully pass ^(exit %SMOKE%^).
-  echo Exe is at dist\Jarvis.exe — test it manually. Mic may need Windows privacy allow.
+if errorlevel 1 (
+  echo Build stopped: smoke failed against the frozen exe.
+  exit /b 1
 )
 
-echo.
-echo ========================================
-echo  Jarvis.exe ready:
-echo  %CD%\dist\Jarvis.exe
-echo ========================================
-echo Optional: copy .env.example to dist\.env and add OPENAI_API_KEY=
-explorer dist
-pause
-endlocal
+echo %CD%\dist\Jarvis.exe
+echo Build OK.
+exit /b 0

@@ -10,3 +10,4 @@ build/
 data/*.db
 *.db
 .DS_Store
+jarvis_diagnose.txt

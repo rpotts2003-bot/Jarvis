@@ -35,4 +35,4 @@ plex:
 voice:
   rate: 145          # pyttsx3; ~200 default, lower = calmer
   volume: 0.92
-  voice_hint: ""     # optional substring, e.g. George
+  voice_hint: George  # prefer Microsoft George / en-GB male

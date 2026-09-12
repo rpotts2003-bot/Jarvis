@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import sys
+import threading
 import tkinter as tk
 from pathlib import Path
 from typing import Callable
@@ -47,10 +48,14 @@ class JarvisWindow:
         wake: WakeListener | None = None,
         status_hint: str = "",
         speak: Callable[[str], None] | None = None,
+        hear: Callable[[], str | None] | None = None,
+        speak_muted: bool = False,
     ):
         self.on_submit = on_submit
         self.wake = wake
         self.speak = speak
+        self.hear = hear if hear is not None else (wake.hear if wake is not None else None)
+        self._speak_muted = speak_muted
         self._cmd_q: queue.Queue[str] = queue.Queue()
         self.state = VoiceState.IDLE
         self._t = 0.0
@@ -59,6 +64,17 @@ class JarvisWindow:
         self.rings = RingTiming()
         self._demo_job: str | None = None
         self._mic_muted = False
+        self._speak_gen = 0
+        self._armed_caption = (
+            'Say "Jarvis …" or tap Listen'
+            if self.hear is not None
+            else "Type below — voice deps missing; re-run Start Jarvis.bat"
+        )
+        if status_hint:
+            # Keep short status chips but prefer beginner caption as primary
+            self._status_hint = status_hint
+        else:
+            self._status_hint = ""
 
         self.root = tk.Tk()
         self.root.title(title)
@@ -84,7 +100,7 @@ class JarvisWindow:
 
         self.caption = tk.Label(
             self.root,
-            text=status_hint or "Say Jarvis… then your command — or type below",
+            text=self._armed_caption,
             fg="#b0bec5",
             bg=BG,
             font=("Segoe UI", 11),
@@ -95,7 +111,7 @@ class JarvisWindow:
 
         self.state_label = tk.Label(
             self.root,
-            text="idle",
+            text=self._status_hint or "idle",
             fg=CYAN_DIM,
             bg=BG,
             font=("Segoe UI", 9),
@@ -135,6 +151,21 @@ class JarvisWindow:
         )
         self.mute_btn.pack(side=tk.LEFT)
 
+        self.listen_btn = tk.Button(
+            bar,
+            text="Listen",
+            command=self._listen_once,
+            bg="#102027",
+            fg=CYAN,
+            activebackground="#1a333d",
+            activeforeground=CYAN,
+            relief=tk.FLAT,
+            padx=12,
+            pady=8,
+            font=("Segoe UI", 10, "bold"),
+        )
+        self.listen_btn.pack(side=tk.LEFT, padx=(8, 0))
+
         self.test_mic_btn = tk.Button(
             bar,
             text="Test mic",
@@ -162,11 +193,18 @@ class JarvisWindow:
             self.wake.start()
             if self.wake.muted:
                 self._apply_mute_chrome(True)
-            if self.wake.hear is None:
+            if self.wake.hear is None and self.hear is None:
                 self.caption.configure(
-                    text=(status_hint or "")
-                    + " — mic libs missing; type for now. Re-run Start Jarvis.bat"
+                    text="Voice deps missing / run Start Jarvis.bat again — typing still works"
                 )
+            elif self.hear is None:
+                self.caption.configure(
+                    text="Voice deps missing / run Start Jarvis.bat again — typing still works"
+                )
+        if self.wake is None and self.hear is None:
+            self.caption.configure(
+                text="Voice deps missing / run Start Jarvis.bat again — typing still works"
+            )
         self.root.after(400, self._maybe_first_mic_probe)
 
     def _load_hud_image(self) -> None:
@@ -229,6 +267,123 @@ class JarvisWindow:
         self.state_label.configure(text="mic check")
         self.test_mic_btn.configure(fg=CYAN)
 
+    def _armed_idle_caption(self) -> str:
+        if self._mic_muted:
+            return "Mic muted — tap Mute to arm wake, or type below."
+        return self._armed_caption
+
+    def _speak_async(self, text: str, *, idle_detail: str | None = None) -> None:
+        """Speak on a background thread; never block the Tk main loop with runAndWait."""
+        reply = (text or "").strip()
+        if not reply:
+            self.set_state(VoiceState.IDLE, idle_detail or self._armed_idle_caption())
+            return
+        if self._speak_muted:
+            self.set_state(VoiceState.IDLE, idle_detail or reply)
+            return
+        if not self.speak:
+            self.set_state(VoiceState.IDLE, idle_detail or reply)
+            return
+
+        self._speak_gen += 1
+        gen = self._speak_gen
+        self.set_state(VoiceState.SPEAKING, reply, level=0.55)
+
+        def worker() -> None:
+            err: str | None = None
+            try:
+                self.speak(reply)
+            except Exception as e:  # noqa: BLE001
+                err = str(e) or e.__class__.__name__
+
+            def done() -> None:
+                if gen != self._speak_gen:
+                    return
+                if err:
+                    self.set_state(
+                        VoiceState.ERROR,
+                        f"TTS error: {err[:120]}",
+                    )
+                    self.root.after(
+                        2500,
+                        lambda: self.set_state(
+                            VoiceState.IDLE, self._armed_idle_caption()
+                        ),
+                    )
+                else:
+                    self.set_state(
+                        VoiceState.IDLE, idle_detail or self._armed_idle_caption()
+                    )
+                    if not self._mic_muted:
+                        self.state_label.configure(text="idle · wake armed")
+
+            try:
+                self.root.after(0, done)
+            except Exception:
+                pass
+
+        threading.Thread(target=worker, name="jarvis-tts", daemon=True).start()
+
+    def _listen_once(self) -> None:
+        """Push-to-talk: one-shot record without requiring the wake word."""
+        if self._mic_muted:
+            self.set_state(
+                VoiceState.IDLE,
+                "Mic muted — unmute first, then tap Listen.",
+            )
+            return
+        if self.hear is None:
+            self.set_state(
+                VoiceState.ERROR,
+                "Voice deps missing / run Start Jarvis.bat again — typing still works",
+            )
+            return
+
+        if self.wake is not None:
+            self.wake.set_busy(True)
+        self.set_state(VoiceState.LISTENING, "Listening… (tap Listen — no wake word)", level=0.35)
+        self.state_label.configure(text="listen")
+
+        def worker() -> None:
+            text = None
+            err_kind = None
+            try:
+                text = self.hear()
+                err_kind = getattr(self.hear, "last_error", None)
+            except PermissionError:
+                err_kind = "denied"
+            except Exception as e:  # noqa: BLE001
+                err_kind = "mic"
+                text = None
+
+            def finish() -> None:
+                if self.wake is not None and not text:
+                    self.wake.set_busy(False)
+                if text and text.strip():
+                    self._handle_voice_command(text.strip())
+                    return
+                if err_kind in {"network", "stt"}:
+                    msg = "Couldn't hear that (need internet for speech recognition)"
+                elif err_kind == "denied":
+                    msg = "Microphone denied — enable mic privacy, then try Listen again."
+                elif err_kind == "mic":
+                    msg = "Microphone unavailable — check Windows mic settings."
+                else:
+                    msg = "Couldn't hear that (need internet for speech recognition)"
+                self.set_state(VoiceState.IDLE, msg)
+                self.state_label.configure(text="idle")
+                self.root.after(
+                    2800,
+                    lambda: self.set_state(VoiceState.IDLE, self._armed_idle_caption()),
+                )
+
+            try:
+                self.root.after(0, finish)
+            except Exception:
+                pass
+
+        threading.Thread(target=worker, name="jarvis-listen", daemon=True).start()
+
     def _test_mic(self) -> None:
         from assistant.voice.mic_health import mark_probed, probe_microphone
 
@@ -237,11 +392,7 @@ class JarvisWindow:
         if result.ok:
             self.set_state(VoiceState.IDLE, "Microphone OK.")
             self.state_label.configure(text="mic ok")
-            if self.speak:
-                try:
-                    self.speak("Microphone OK.")
-                except Exception:
-                    pass
+            self._speak_async("Microphone OK.", idle_detail="Microphone OK.")
         else:
             self._show_mic_panel(result.message)
 
@@ -269,7 +420,7 @@ class JarvisWindow:
             self.rings.reduced_motion = os.environ.get("JARVIS_REDUCED_MOTION", "").lower() in {
                 "1", "true", "yes"
             }
-            self.set_state(VoiceState.IDLE, "Listening for Jarvis…")
+            self.set_state(VoiceState.IDLE, self._armed_caption)
             self.state_label.configure(text="idle · wake armed")
 
     def _on_wake_state(self, state: str) -> None:
@@ -278,7 +429,7 @@ class JarvisWindow:
                 self._apply_mute_chrome(True)
             elif state in {"idle_armed", "idle"}:
                 if not self._mic_muted:
-                    self.set_state(VoiceState.IDLE, "Listening for Jarvis…")
+                    self.set_state(VoiceState.IDLE, self._armed_caption)
                     self.state_label.configure(text="idle · wake armed")
             elif state == "wake":
                 self.set_state(VoiceState.LISTENING, "Heard Jarvis…", level=0.5)
@@ -287,7 +438,7 @@ class JarvisWindow:
             elif state == "busy":
                 self.set_state(VoiceState.THINKING)
             elif state == "idle_timeout":
-                self.set_state(VoiceState.IDLE, "Say Jarvis… then your command.")
+                self.set_state(VoiceState.IDLE, self._armed_caption)
             elif state == "mic_denied":
                 self.set_state(
                     VoiceState.ERROR,
@@ -317,20 +468,60 @@ class JarvisWindow:
             reply = self.on_submit(cmd)
         except Exception as e:  # noqa: BLE001
             self.set_state(VoiceState.ERROR, f"Error: {e}")
-            return
-        self.set_state(VoiceState.SPEAKING, reply or "", level=0.55)
-        if self.speak:
-            try:
-                self.speak(reply or "")
-            except Exception:
-                pass
-        def _done() -> None:
             if self.wake is not None:
                 self.wake.set_busy(False)
-            self.set_state(VoiceState.IDLE, "Listening for Jarvis…")
-            self.state_label.configure(text="idle · wake armed")
+            return
 
-        self.root.after(200, _done)
+        def after_speak() -> None:
+            if self.wake is not None:
+                self.wake.set_busy(False)
+            if not self._mic_muted:
+                self.state_label.configure(text="idle · wake armed")
+
+        # Speak once on background thread; clear busy after TTS finishes
+        reply_s = (reply or "").strip()
+        if not reply_s:
+            self.set_state(VoiceState.IDLE, self._armed_idle_caption())
+            after_speak()
+            return
+
+        self._speak_gen += 1
+        gen = self._speak_gen
+        self.set_state(VoiceState.SPEAKING, reply_s, level=0.55)
+
+        if self._speak_muted or not self.speak:
+            self.set_state(VoiceState.IDLE, reply_s)
+            after_speak()
+            return
+
+        def worker() -> None:
+            err: str | None = None
+            try:
+                self.speak(reply_s)
+            except Exception as e:  # noqa: BLE001
+                err = str(e) or e.__class__.__name__
+
+            def done() -> None:
+                if gen != self._speak_gen:
+                    return
+                after_speak()
+                if err:
+                    self.set_state(VoiceState.ERROR, f"TTS error: {err[:120]}")
+                    self.root.after(
+                        2500,
+                        lambda: self.set_state(
+                            VoiceState.IDLE, self._armed_idle_caption()
+                        ),
+                    )
+                else:
+                    self.set_state(VoiceState.IDLE, self._armed_idle_caption())
+
+            try:
+                self.root.after(0, done)
+            except Exception:
+                pass
+
+        threading.Thread(target=worker, name="jarvis-tts", daemon=True).start()
 
     def _on_close(self) -> None:
         if self.wake is not None:
@@ -377,17 +568,14 @@ class JarvisWindow:
             reply = self.on_submit(text)
         except Exception as e:  # noqa: BLE001
             self.set_state(VoiceState.ERROR, f"Error: {e}")
-            self.root.after(1200, lambda: self.set_state(VoiceState.IDLE, "Ready."))
+            self.root.after(
+                1200, lambda: self.set_state(VoiceState.IDLE, self._armed_idle_caption())
+            )
             return
-        self.set_state(VoiceState.SPEAKING, reply or "", level=0.55)
         self.root.after(200, lambda: self.rings.set_level(0.8))
         self.root.after(450, lambda: self.rings.set_level(0.35))
-        if self.speak:
-            try:
-                self.speak(reply or "")
-            except Exception:
-                pass
-        self.root.after(200, lambda: self.set_state(VoiceState.IDLE, reply or "Ready."))
+        # Typed replies: single speak path on background thread (mic mute does not skip)
+        self._speak_async(reply or "", idle_detail=self._armed_idle_caption())
 
     def _tick(self) -> None:
         drive = self.rings.tick()
@@ -528,6 +716,8 @@ def run_gui(
     wake: WakeListener | None = None,
     status_hint: str = "",
     speak: Callable[[str], None] | None = None,
+    hear: Callable[[], str | None] | None = None,
+    speak_muted: bool = False,
 ) -> None:
     JarvisWindow(
         title=title,
@@ -535,4 +725,6 @@ def run_gui(
         wake=wake,
         status_hint=status_hint,
         speak=speak,
+        hear=hear,
+        speak_muted=speak_muted,
     ).run()

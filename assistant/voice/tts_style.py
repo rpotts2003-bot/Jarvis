@@ -12,7 +12,7 @@ class TtsStyle:
     # pyttsx3 volume 0.0–1.0
     volume: float = 0.92
     # Soft preference string matched against voice name/id (optional override)
-    voice_hint: str = ""
+    voice_hint: str = "George"
 
 
 # Scoring keywords for SAPI / OneCore voice ids on Windows
@@ -26,23 +26,44 @@ _UK_HINTS = (
     "uk ",
     " uk",
 )
-_MALE_HINTS = (
-    "male",
+_MALE_NAME_HINTS = (
     "george",  # classic Windows UK male
     "ryan",
     "thomas",
-    "sonia",  # skip — female; listed so we can downrank below
-    "hazel",  # female UK
-    "susan",
-    "zira",
-    "david",  # often US male — weaker UK score
+    "david",  # often US male — weaker UK score but still male
     "mark",
     "ravi",
     "james",
     "oliver",
     "arthur",
 )
-_FEMALE_HINTS = ("female", "hazel", "susan", "zira", "sonia", "catherine", "aria", "jenny")
+_FEMALE_HINTS = (
+    "female",
+    "hazel",
+    "susan",
+    "zira",
+    "sonia",
+    "catherine",
+    "aria",
+    "jenny",
+    "eva",
+    "heera",
+)
+
+
+def is_female_voice_label(label: str) -> bool:
+    s = (label or "").lower()
+    return any(h in s for h in _FEMALE_HINTS)
+
+
+def is_male_voice_label(label: str) -> bool:
+    """True if label looks male and is not also tagged female."""
+    s = (label or "").lower()
+    if is_female_voice_label(s):
+        return False
+    if "male" in s:
+        return True
+    return any(h in s for h in _MALE_NAME_HINTS)
 
 
 def score_windows_voice(label: str, *, prefer_hint: str = "") -> int:
@@ -57,30 +78,63 @@ def score_windows_voice(label: str, *, prefer_hint: str = "") -> int:
         score += 40  # classic Microsoft George (UK)
     if any(h in s for h in ("ryan", "thomas", "oliver", "arthur", "james")):
         score += 25
+    if "david" in s or "mark" in s or "ravi" in s:
+        score += 15  # male but often US
     if "male" in s:
         score += 20
-    if any(h in s for h in _FEMALE_HINTS):
+    if is_female_voice_label(s):
         score -= 60
     if "en-us" in s or "english (united states)" in s:
         score -= 15
     return score
 
 
+def _voice_parts(v) -> tuple[str | None, str]:
+    if isinstance(v, tuple):
+        return v[0], v[1] if len(v) > 1 else ""
+    vid = getattr(v, "id", None)
+    name = getattr(v, "name", "") or ""
+    return vid, name
+
+
 def pick_best_voice_id(voices: list, *, prefer_hint: str = "") -> str | None:
-    """voices: objects with .id and .name (pyttsx3) or (id, name) tuples."""
-    best_id: str | None = None
-    best = -10_000
+    """Pick best UK-male style voice.
+
+    Never selects a female-labelled voice when any non-female candidate exists.
+    Female-only inventories may still return the least-bad (highest score) voice.
+    """
+    scored: list[tuple[int, str, str]] = []
     for v in voices:
-        if isinstance(v, tuple):
-            vid, name = v[0], v[1]
-        else:
-            vid = getattr(v, "id", None)
-            name = getattr(v, "name", "") or ""
+        vid, name = _voice_parts(v)
         if not vid:
             continue
         label = f"{name} {vid}"
         sc = score_windows_voice(label, prefer_hint=prefer_hint)
-        if sc > best:
-            best = sc
-            best_id = vid
-    return best_id if best > 0 else best_id  # still return best even if weak
+        scored.append((sc, str(vid), label))
+    if not scored:
+        return None
+
+    non_female = [(sc, vid, lab) for sc, vid, lab in scored if not is_female_voice_label(lab)]
+    # Prefer explicit male when present; else any non-female; else female-only least-bad
+    males = [(sc, vid, lab) for sc, vid, lab in non_female if is_male_voice_label(lab)]
+    if males:
+        pool = males
+    elif non_female:
+        pool = non_female
+    else:
+        pool = scored  # female-only: document as least-bad fallback
+
+    pool.sort(key=lambda x: x[0], reverse=True)
+    return pool[0][1]
+
+
+def pick_best_voice_name(voices: list, *, prefer_hint: str = "") -> str | None:
+    """Same ranking as pick_best_voice_id but returns the display name when available."""
+    best_id = pick_best_voice_id(voices, prefer_hint=prefer_hint)
+    if not best_id:
+        return None
+    for v in voices:
+        vid, name = _voice_parts(v)
+        if str(vid) == str(best_id):
+            return name or str(vid)
+    return str(best_id)

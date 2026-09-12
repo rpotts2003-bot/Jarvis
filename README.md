@@ -39,9 +39,9 @@ Also: `next time I say downloads, do open chrome` · `remember that my name is R
 
 ## Voice
 
-Speech prefers free Windows British male TTS (*George* / `en-GB`) when available. Soft tip: install the English (United Kingdom) speech pack in Windows Settings.
+Speech prefers free Windows British male TTS (*George* / `en-GB`) when available. Soft tip: install the English (United Kingdom) speech pack in Windows Settings → Time & Language → Speech.
 
-Jarvis listens after you say its name (`Jarvis` by default). Use **Mute** on the HUD to silence the mic. Typing always works if the mic fails.
+Jarvis listens after you say its name (`Jarvis` by default), or tap **Listen** on the HUD for one command without the wake word. Use **Mute** to silence the mic. Typed replies are spoken aloud. Typing always works if the mic fails.
 
 Say `diagnose` or `test mic`, or use **Test mic** on the HUD.
 

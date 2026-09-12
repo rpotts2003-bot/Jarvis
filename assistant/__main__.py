@@ -60,6 +60,7 @@ def chat_loop() -> None:
 
 def gui_loop() -> None:
     from assistant.ui.gui import run_gui
+    from assistant.voice.adapters import MockTTS
     from assistant.voice.platform_io import make_mic_hear, make_tts
     from assistant.voice.wake import WakeConfig, WakeListener
 
@@ -76,16 +77,22 @@ def gui_loop() -> None:
         "off",
     }
 
+    # Single speak path: GUI owns talkback. Orchestrator TTS is a no-op so
+    # _speak_result never double-speaks (pyttsx3 lock / silent second utter).
     tts = make_tts()
-    orch.tts = tts
+    orch.tts = MockTTS()
 
     def on_submit(text: str) -> str:
         turn = orch.handle_utterance(text)
         return turn.reply or ""
 
     status_bits = ["chat:OpenAI" if cloud_chat_enabled() else "chat:offline"]
-    hear = make_mic_hear() if always else None
+    # Always try mic for Listen button; wake optional via always_listen
+    hear = make_mic_hear()
     status_bits.append("mic:on" if hear else "mic:type-only (install voice deps)")
+    tts_label = getattr(tts, "status_label", None)
+    if tts_label:
+        status_bits.append(str(tts_label))
 
     wake = None
     if always:
@@ -103,6 +110,7 @@ def gui_loop() -> None:
         wake=wake,
         status_hint=" · ".join(status_bits),
         speak=tts.speak,
+        hear=hear,
     )
 
 
@@ -137,8 +145,10 @@ def _run_diagnose() -> int:
         lines.append(f"mic: {result.status.value}")
         lines.append(result.message)
         try:
-            make_tts().speak("")
-            lines.append("tts: ok")
+            tts = make_tts()
+            tts.speak("")
+            label = getattr(tts, "status_label", None) or getattr(tts, "voice_name", None)
+            lines.append(f"tts: ok ({label})" if label else "tts: ok")
         except Exception as e:
             lines.append(f"tts: fail ({e})")
             code = 1

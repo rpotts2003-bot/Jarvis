@@ -372,7 +372,7 @@ class JarvisWindow:
 
         if self.wake is not None:
             self.wake.set_busy(True)
-        self.set_state(VoiceState.LISTENING, "Speak now… level 0%", level=0.35)
+        self.set_state(VoiceState.LISTENING, "Speak now, sir…", level=0.35)
         self.state_label.configure(text="listen")
 
         # Live VU + caption peak % while recording
@@ -382,10 +382,11 @@ class JarvisWindow:
             def apply(lv: float = level, p: int = pct) -> None:
                 self.rings.set_level(lv)
                 if self.state == VoiceState.LISTENING:
-                    self.caption.configure(
-                        text=f"Speak now… level {p}%",
-                        fg="#b0bec5",
-                    )
+                    # Prefer calm "Speak now, sir…" — append level only when VU moves
+                    cap = "Speak now, sir…"
+                    if p >= 8:
+                        cap = f"Speak now, sir… level {p}%"
+                    self.caption.configure(text=cap, fg="#b0bec5")
                 self._draw()
 
             try:
@@ -426,10 +427,14 @@ class JarvisWindow:
                 peak = float(getattr(self.hear, "last_peak", 0.0) or 0.0)
                 peak_pct = int(max(0, min(100, round(peak * 100))))
                 peak_hint = f" (level {peak_pct}%)" if peak > 0 else ""
+                tip = (
+                    "Windows tip: Settings → Privacy → Microphone (allow for apps/"
+                    "Python), set default input device, unmute the mic — then Listen again."
+                )
                 if err_kind == "network":
                     msg = (
                         "Heard audio but couldn’t transcribe "
-                        "(need internet for Google STT, or try again louder)"
+                        "(need internet for Google STT fallback, or try again louder)"
                         + peak_hint
                     )
                     st = VoiceState.ERROR
@@ -440,12 +445,26 @@ class JarvisWindow:
                     )
                     st = VoiceState.ERROR
                 elif err_kind == "denied":
-                    msg = "Microphone denied — enable mic privacy, then try Listen again."
+                    msg = (
+                        "Microphone denied, sir — allow mic in Windows Privacy → "
+                        "Microphone, then tap Listen again."
+                    )
                     st = VoiceState.ERROR
+                elif err_kind == "timeout":
+                    msg = (
+                        "Didn’t catch that, sir — speak clearly after Listen. " + tip
+                    )
+                    st = VoiceState.IDLE
+                elif err_kind == "empty":
+                    msg = (
+                        "No words recognized, sir — check default mic / unmute, "
+                        "then speak clearly. " + tip
+                    )
+                    st = VoiceState.IDLE
                 elif err_kind == "mic" or peak < 1e-4:
                     msg = (
-                        "Mic level flat — pick default mic in Windows Sound settings "
-                        "/ unmute / allow privacy"
+                        "Mic level flat, sir — set default input in Windows Sound, "
+                        "unmute, allow Privacy → Microphone."
                         + peak_hint
                     )
                     st = VoiceState.ERROR
@@ -454,19 +473,18 @@ class JarvisWindow:
                     if peak >= 1e-4:
                         msg = (
                             "Heard audio but couldn’t transcribe "
-                            "(need internet for Google STT, or try again louder)"
+                            "(need internet for Google STT fallback, or try again louder)"
                             + peak_hint
                         )
                     else:
                         msg = (
-                            "Mic level flat — pick default mic in Windows Sound settings "
-                            "/ unmute / allow privacy"
+                            "No speech heard, sir — " + tip
                         )
                     st = VoiceState.IDLE
                 self.set_state(st, msg)
                 self.state_label.configure(text="idle" if st == VoiceState.IDLE else "error")
                 self.root.after(
-                    3200,
+                    4200,
                     lambda: self.set_state(VoiceState.IDLE, self._armed_idle_caption()),
                 )
 

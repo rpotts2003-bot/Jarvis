@@ -25,7 +25,7 @@ Honesty: Jarvis manages a downloaded GGUF file (default Qwen2.5-1.5B-Instruct Q4
 Start Jarvis.bat → .venv → pip (voice + try llama-cpp-python) → python -m assistant gui
   ├── Orchestrator (builtins → skills → actions → chat_reply)
   ├── chat_reply: bundled GGUF → optional Ollama (JARVIS_LOCAL_LLM=1 only) → optional cloud → tip
-  ├── WakeListener + make_mic_hear (fixed ~5s Listen / shorter wake)
+  ├── WakeListener + make_mic_hear (Windows Speech Listen / sounddevice wake)
   └── JarvisWindow (tk Canvas HUD + Mute / Listen / typed input; async submit)
 ```
 

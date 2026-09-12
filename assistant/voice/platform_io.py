@@ -1,4 +1,4 @@
-"""Optional Windows mic STT + Edge neural / SAPI TTS. Degrades gracefully if deps missing."""
+"""Windows mic STT (native Speech + Google fallback) + Edge neural / SAPI TTS."""
 
 from __future__ import annotations
 
@@ -760,26 +760,14 @@ def _record_vad_ptt(
     return flat, peak, speech_started, rate
 
 
-def make_mic_hear(
+def _make_google_mic_hear(
     *,
     on_level: Callable[[float], None] | None = None,
     mode: HearMode = "ptt",
     duration_s: float | None = None,
     wait_speech_s: float | None = None,
 ) -> Callable[[], str | None] | None:
-    """Record via sounddevice; recognize with SpeechRecognition (Google STT).
-
-    mode=\"ptt\": Listen button — fixed ~5s window by default (Speak now…).
-    mode=\"wake\": shorter fixed chunk for always-listen; skip Google on flat silence.
-
-    Set JARVIS_VAD=1 to use energy-gated capture instead of fixed windows.
-
-    The returned callable has attributes:
-      last_error: None | \"network\" | \"unknown\" | \"stt\" | \"mic\"
-      last_peak: float peak |sample| from last capture
-      on_level: optional VU callback (mutable)
-      mode: wake|ptt
-    """
+    """sounddevice capture + Google STT (SpeechRecognition)."""
     try:
         import numpy as np  # noqa: F401
         import sounddevice as sd  # noqa: F401
@@ -793,6 +781,7 @@ def make_mic_hear(
     def hear() -> str | None:
         hear.last_error = None  # type: ignore[attr-defined]
         hear.last_peak = 0.0  # type: ignore[attr-defined]
+        hear.last_backend = "google"  # type: ignore[attr-defined]
         level_cb = hear.on_level  # type: ignore[attr-defined]
         use_mode: HearMode = hear.mode  # type: ignore[attr-defined]
         use_vad = _vad_enabled()
@@ -850,16 +839,139 @@ def make_mic_hear(
 
     hear.last_error = None  # type: ignore[attr-defined]
     hear.last_peak = 0.0  # type: ignore[attr-defined]
+    hear.last_backend = "google"  # type: ignore[attr-defined]
     hear.on_level = on_level  # type: ignore[attr-defined]
     hear.mode = mode  # type: ignore[attr-defined]
     return hear
+
+
+def _make_native_then_google_hear(
+    *,
+    on_level: Callable[[float], None] | None = None,
+    mode: HearMode = "ptt",
+    duration_s: float | None = None,
+    wait_speech_s: float | None = None,
+    native_timeout_s: float = 8.0,
+) -> Callable[[], str | None] | None:
+    """Listen (ptt): Windows System.Speech first; Google if native unavailable."""
+    from assistant.voice.windows_sr import make_windows_sr_hear, native_sr_supported
+
+    google = _make_google_mic_hear(
+        on_level=on_level,
+        mode=mode,
+        duration_s=duration_s,
+        wait_speech_s=wait_speech_s,
+    )
+    native = None
+    if mode == "ptt" and native_sr_supported():
+        native = make_windows_sr_hear(on_level=on_level, timeout_s=native_timeout_s)
+    if native is None:
+        return google
+    if google is None:
+        return native
+
+    def hear() -> str | None:
+        hear.last_error = None  # type: ignore[attr-defined]
+        hear.last_peak = 0.0  # type: ignore[attr-defined]
+        hear.last_backend = "windows_sr"  # type: ignore[attr-defined]
+        level_cb = hear.on_level  # type: ignore[attr-defined]
+        try:
+            native.on_level = level_cb  # type: ignore[attr-defined]
+            google.on_level = level_cb  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        try:
+            text = native()
+        except PermissionError:
+            hear.last_error = "denied"  # type: ignore[attr-defined]
+            hear.last_backend = "windows_sr"  # type: ignore[attr-defined]
+            raise
+        except Exception:
+            text = None
+            try:
+                native.last_error = "unavailable"  # type: ignore[attr-defined]
+            except Exception:
+                pass
+        err = getattr(native, "last_error", None)
+        peak = float(getattr(native, "last_peak", 0.0) or 0.0)
+        if text and str(text).strip():
+            hear.last_peak = peak or 0.4  # type: ignore[attr-defined]
+            hear.last_backend = "windows_sr"  # type: ignore[attr-defined]
+            hear.last_error = None  # type: ignore[attr-defined]
+            return str(text).strip()
+        # Fall back only when native stack is missing/broken — not on
+        # timeout/empty/denied (those already used the default mic).
+        if err in (None, "unavailable", "error"):
+            hear.last_backend = "google"  # type: ignore[attr-defined]
+            try:
+                gtext = google()
+            except PermissionError:
+                hear.last_error = "denied"  # type: ignore[attr-defined]
+                raise
+            hear.last_error = getattr(google, "last_error", None)  # type: ignore[attr-defined]
+            hear.last_peak = float(  # type: ignore[attr-defined]
+                getattr(google, "last_peak", 0.0) or 0.0
+            )
+            return gtext
+        hear.last_error = err  # type: ignore[attr-defined]
+        hear.last_peak = peak  # type: ignore[attr-defined]
+        hear.last_backend = "windows_sr"  # type: ignore[attr-defined]
+        return None
+
+    hear.last_error = None  # type: ignore[attr-defined]
+    hear.last_peak = 0.0  # type: ignore[attr-defined]
+    hear.last_backend = "windows_sr"  # type: ignore[attr-defined]
+    hear.on_level = on_level  # type: ignore[attr-defined]
+    hear.mode = mode  # type: ignore[attr-defined]
+    return hear
+
+
+def make_mic_hear(
+    *,
+    on_level: Callable[[float], None] | None = None,
+    mode: HearMode = "ptt",
+    duration_s: float | None = None,
+    wait_speech_s: float | None = None,
+) -> Callable[[], str | None] | None:
+    """Mic hear callable for Listen (ptt) or wake chunks.
+
+    mode="ptt" (Listen button): on Windows prefer System.Speech via
+    scripts/windows_listen.ps1 (~8s Recognize); fall back to sounddevice +
+    Google STT if native SR is unavailable. Non-Windows uses Google path.
+
+    mode="wake": sounddevice fixed/VAD chunks + Google (fuzzy wake stays here).
+
+    Set JARVIS_VAD=1 to use energy-gated capture on the Google path.
+    Set JARVIS_FORCE_GOOGLE_STT=1 to skip native Windows SR.
+
+    The returned callable has attributes:
+      last_error: None | "network" | "unknown" | "stt" | "mic" |
+                  "timeout" | "empty" | "denied" | "unavailable" | "error"
+      last_peak: float peak |sample| from last capture
+      last_backend: "windows_sr" | "google"
+      on_level: optional VU callback (mutable)
+      mode: wake|ptt
+    """
+    if mode == "ptt":
+        return _make_native_then_google_hear(
+            on_level=on_level,
+            mode=mode,
+            duration_s=duration_s,
+            wait_speech_s=wait_speech_s,
+        )
+    return _make_google_mic_hear(
+        on_level=on_level,
+        mode=mode,
+        duration_s=duration_s,
+        wait_speech_s=wait_speech_s,
+    )
 
 
 def make_mic_hear_ptt(
     *,
     on_level: Callable[[float], None] | None = None,
 ) -> Callable[[], str | None] | None:
-    """Listen-button path: fixed ~5s record + Google STT (VAD if JARVIS_VAD=1)."""
+    """Listen-button path: Windows Speech when available, else Google STT."""
     return make_mic_hear(on_level=on_level, mode="ptt")
 
 

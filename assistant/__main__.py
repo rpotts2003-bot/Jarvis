@@ -90,11 +90,16 @@ def gui_loop() -> None:
 
     chat_label = chat_backend_label(probe=True)
     status_bits = [chat_label]
-    # Listen button: fixed ~5s (ptt). Wake loop: shorter fixed chunk. JARVIS_VAD=1 for energy gate.
+    # Listen: Windows Speech (ptt) when available, else sounddevice+Google.
+    # Wake loop: shorter sounddevice chunk. JARVIS_VAD=1 for energy gate on Google path.
     hear_ptt = make_mic_hear(mode="ptt")
     hear_wake = make_mic_hear(mode="wake")
     hear = hear_ptt
-    status_bits.append("mic:on" if hear else "mic:type-only (install voice deps)")
+    if hear:
+        backend = getattr(hear, "last_backend", None) or "mic"
+        status_bits.append(f"mic:on ({backend})")
+    else:
+        status_bits.append("mic:type-only (install voice deps)")
     tts_label = getattr(tts, "status_label", None)
     if tts_label:
         status_bits.append(str(tts_label))

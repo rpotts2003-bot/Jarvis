@@ -10,6 +10,7 @@ datas = [
     (str(root / "assistant" / "ui" / "assets"), "assistant/ui/assets"),
     (str(root / ".env.example"), "."),
     (str(root / "VERSION"), "."),
+    (str(root / "scripts" / "windows_listen.ps1"), "scripts"),
 ]
 
 hidden = [

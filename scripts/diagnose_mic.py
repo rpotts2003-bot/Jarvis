@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mic reliability diagnose: list default device, capture peak/rms, write report.
+"""Mic reliability diagnose: list default device, native SR probe, capture peak/rms.
 
 Usage (from repo root):
   python scripts/diagnose_mic.py
@@ -25,6 +25,7 @@ def main() -> int:
     from assistant.envload import load_env
     from assistant.voice.mic_health import mark_probed, probe_microphone
     from assistant.voice.platform_io import _PTT_DURATION_S, _WAKE_DURATION_S, _vad_enabled
+    from assistant.voice import windows_sr
 
     load_env()
     lines: list[str] = []
@@ -33,6 +34,33 @@ def main() -> int:
     lines.append(f"ptt_duration_s: {_PTT_DURATION_S}")
     lines.append(f"wake_duration_s: {_WAKE_DURATION_S}")
     lines.append(f"vad_enabled: {_vad_enabled()}")
+
+    # Native Windows Speech Recognition availability
+    lines.append("--- native_windows_sr ---")
+    script = windows_sr.windows_listen_script_path()
+    lines.append(f"script: {script}")
+    lines.append(f"powershell: {windows_sr.powershell_exe()}")
+    lines.append(f"native_sr_supported: {windows_sr.native_sr_supported()}")
+    try:
+        probe = windows_sr.probe_native_sr()
+        lines.append(f"native_probe_status: {probe.get('status')}")
+        if probe.get("error"):
+            lines.append(f"native_probe_error: {probe.get('error')}")
+        if probe.get("probe"):
+            lines.append(f"native_probe: {probe.get('probe')}")
+        # Optional short Recognize test when probe is ready (Windows only)
+        if (
+            probe.get("status") == windows_sr.STATUS_OK
+            and sys.platform.startswith("win")
+        ):
+            lines.append("native_recognize_test: speaking window ~3s — say something…")
+            text, err = windows_sr.recognize_native(timeout_s=3.0)
+            if text:
+                lines.append(f"native_recognize_text: {text!r}")
+            else:
+                lines.append(f"native_recognize_error: {err}")
+    except Exception as e:  # noqa: BLE001
+        lines.append(f"native_probe_exception: {e}")
 
     # Device list (best-effort)
     try:
@@ -71,10 +99,15 @@ def main() -> int:
     if result.ok and result.peak < 1e-5:
         lines.append(
             "HINT: stream opened but peak flat — unmute Windows mic, set default "
-            "device, allow mic privacy for Python/Jarvis, then speak during Listen (5s)."
+            "device, allow mic privacy for Python/Jarvis, then speak during Listen."
         )
     elif not result.ok:
         lines.append("HINT: fix status above, then re-run. Typing in the HUD still works.")
+    if sys.platform.startswith("win"):
+        lines.append(
+            "HINT: Listen uses Windows Speech Recognition when available "
+            "(Privacy → Microphone must allow apps/Python)."
+        )
 
     code = 0 if result.ok else 3
     if result.status.value == "missing_dep":
@@ -90,8 +123,7 @@ def main() -> int:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text, encoding="utf-8")
-            lines_print_note = f"wrote: {path}"
-            print(lines_print_note)
+            print(f"wrote: {path}")
         except Exception as e:
             print(f"write_fail: {path} ({e})")
     print(text, end="")

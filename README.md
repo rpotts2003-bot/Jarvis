@@ -2,7 +2,7 @@
 
 Local-first desktop assistant: push-to-talk ready state machine, teachable memory, allowlisted PC actions, and a listening orb (Idle / Listening / Thinking / Speaking).
 
-> Core intent + memory + actions run offline. Free-form chat uses a **GGUF language-model file that Jarvis downloads and manages itself** under `%USERPROFILE%\.jarvis\models\` (no separate Ollama app, no required OpenAI/Grok key). Voice uses Windows TTS + Google STT (online) via `sounddevice`; cloud chat keys are optional only.
+> Core intent + memory + actions run offline. Free-form chat uses a **GGUF language-model file that Jarvis downloads and manages itself** under `%USERPROFILE%\.jarvis\models\` (no separate Ollama app, no required OpenAI/Grok key). Voice uses Windows TTS; **Listen** prefers Windows Speech Recognition, with `sounddevice` + Google STT as fallback; cloud chat keys are optional only.
 
 ## Honesty
 
@@ -53,9 +53,11 @@ Also: `next time I say downloads, do open chrome` · `remember that my name is R
 
 Speech uses free neural UK male via Edge TTS (`en-GB-RyanNeural`, needs internet); offline falls back to Windows SAPI (*George*). Soft tip: UK speech pack still helps the offline fallback.
 
-Jarvis listens after you say its name (`Jarvis` by default), or tap **Listen** on the HUD for one command without the wake word. Use **Mute** to silence the mic. Typed replies are spoken aloud. Typing always works if the mic fails.
+**Listen** on Windows uses **Windows Speech Recognition** (`System.Speech` via `scripts/windows_listen.ps1`) with the OS default microphone when available; it falls back to `sounddevice` + Google STT if native SR is unavailable. Allow microphone access in **Settings → Privacy → Microphone** for apps / Python, set your laptop mic as the default input device, and unmute it.
 
-Say `diagnose` or `test mic`, or use **Test mic** on the HUD.
+Jarvis also listens after you say its name (`Jarvis` by default), or tap **Listen** on the HUD for one command without the wake word. Use **Mute** to silence the mic. Typed replies are spoken aloud. Typing always works if the mic fails.
+
+Say `diagnose` or `test mic`, or use **Test mic** on the HUD (`scripts/diagnose_mic.py` also probes native Windows SR).
 
 ## Safety
 

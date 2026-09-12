@@ -62,9 +62,10 @@ def main() -> int:
     except Exception as e:  # noqa: BLE001
         lines.append(f"native_probe_exception: {e}")
 
-    # Device list (best-effort)
+    # Device list + 0.3s peak probe per input (shows which mic is live)
     try:
         import sounddevice as sd  # type: ignore
+        from assistant.voice.platform_io import list_input_peaks, resolve_input_device
 
         lines.append("--- devices ---")
         try:
@@ -73,12 +74,28 @@ def main() -> int:
         except Exception as e:
             lines.append(f"default_input_error: {e}")
         try:
-            for i, d in enumerate(sd.query_devices()):
-                if int(d.get("max_input_channels", 0) or 0) > 0:
-                    lines.append(
-                        f"  [{i}] {d.get('name')} ch={d.get('max_input_channels')} "
-                        f"rate={d.get('default_samplerate')}"
-                    )
+            rows = list_input_peaks(duration_s=0.3)
+            if not rows:
+                for i, d in enumerate(sd.query_devices()):
+                    if int(d.get("max_input_channels", 0) or 0) > 0:
+                        lines.append(
+                            f"  [{i}] {d.get('name')} ch={d.get('max_input_channels')} "
+                            f"rate={d.get('default_samplerate')}"
+                        )
+            for row in rows:
+                err = row.get("error")
+                extra = f" error={err}" if err else ""
+                lines.append(
+                    f"  [{row['index']}] {row.get('name')} "
+                    f"ch={row.get('max_input_channels')} "
+                    f"rate={row.get('sample_rate')} "
+                    f"peak={float(row.get('peak') or 0):.6f}{extra}"
+                )
+            try:
+                chosen = resolve_input_device()
+                lines.append(f"auto_pick_device_index: {chosen}")
+            except Exception as e:
+                lines.append(f"auto_pick_error: {e}")
         except Exception as e:
             lines.append(f"list_error: {e}")
     except Exception as e:
@@ -97,10 +114,9 @@ def main() -> int:
     lines.append(f"sample_rate: {result.sample_rate}")
 
     if result.ok and result.peak < 1e-5:
-        lines.append(
-            "HINT: stream opened but peak flat — unmute Windows mic, set default "
-            "device, allow mic privacy for Python/Jarvis, then speak during Listen."
-        )
+        from assistant.voice.platform_io import FLAT_MIC_TIP
+
+        lines.append("HINT: " + FLAT_MIC_TIP)
     elif not result.ok:
         lines.append("HINT: fix status above, then re-run. Typing in the HUD still works.")
     if sys.platform.startswith("win"):

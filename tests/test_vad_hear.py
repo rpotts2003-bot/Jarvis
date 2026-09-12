@@ -2,8 +2,11 @@
 
 from assistant.voice.platform_io import (
     _FLAT_PEAK_EPS,
+    _NATIVE_LISTEN_TIMEOUT_S,
     _PTT_DURATION_S,
     _TARGET_STT_RATE,
+    _WAKE_DURATION_S,
+    _WAKE_NATIVE_TIMEOUT_S,
     _resample_to_16k,
     _vad_enabled,
     level_from_rms,
@@ -61,5 +64,8 @@ def test_resample_from_48k_length():
 def test_ptt_defaults_fixed_not_vad(monkeypatch):
     monkeypatch.delenv("JARVIS_VAD", raising=False)
     assert _vad_enabled() is False
-    assert _PTT_DURATION_S >= 4.5
+    assert _PTT_DURATION_S >= 14.0  # Listen window ~15s
+    assert _WAKE_DURATION_S >= 6.0
+    assert _WAKE_NATIVE_TIMEOUT_S >= 6.0
+    assert _NATIVE_LISTEN_TIMEOUT_S >= 14.0
     assert _FLAT_PEAK_EPS > 0

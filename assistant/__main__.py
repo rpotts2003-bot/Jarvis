@@ -90,8 +90,9 @@ def gui_loop() -> None:
 
     chat_label = chat_backend_label(probe=True)
     status_bits = [chat_label]
-    # Listen: Windows Speech (ptt) when available, else sounddevice+Google.
-    # Wake loop: shorter sounddevice chunk. JARVIS_VAD=1 for energy gate on Google path.
+    # Listen: Windows Speech (~15s) when available, else sounddevice+Google (~15s).
+    # Wake loop: Windows SR ~7s chunks (fuzzy Jarvis); Google only if native unavailable.
+    # JARVIS_VAD=1 for energy gate on Google path. Mute hard-blocks the wake loop.
     hear_ptt = make_mic_hear(mode="ptt")
     hear_wake = make_mic_hear(mode="wake")
     hear = hear_ptt
@@ -106,9 +107,8 @@ def gui_loop() -> None:
 
     wake = None
     if always:
-        # Post-wake command capture: slightly longer fixed window (~6s) so bare
-        # "Jarvis" + follow-up question is not abandoned mid-utterance.
-        hear_cmd = make_mic_hear(mode="ptt", duration_s=6.0) or hear_ptt
+        # Post-wake command capture: full Listen window (~15s) after bare "Jarvis".
+        hear_cmd = make_mic_hear(mode="ptt") or hear_ptt
         wake = WakeListener(
             config=WakeConfig(wake_name=str(wake_name)),
             hear=hear_wake or hear_ptt,

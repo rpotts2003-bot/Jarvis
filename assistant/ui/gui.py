@@ -372,20 +372,36 @@ class JarvisWindow:
 
         if self.wake is not None:
             self.wake.set_busy(True)
-        self.set_state(VoiceState.LISTENING, "Speak now, sir…", level=0.35)
+        backend0 = getattr(self.hear, "last_backend", None)
+        if backend0 == "windows_sr":
+            listen_cap = "Speak now, sir… (Windows mic)"
+        else:
+            listen_cap = "Speak now, sir…"
+        self.set_state(VoiceState.LISTENING, listen_cap, level=0.35)
         self.state_label.configure(text="listen")
 
-        # Live VU + caption peak % while recording
+        # Live VU + caption peak % while recording (never show level 0%)
+        max_vu_pct = [0]
+
         def _vu(level: float) -> None:
             pct = int(max(0, min(100, round(float(level) * 100))))
+            if pct > max_vu_pct[0]:
+                max_vu_pct[0] = pct
 
             def apply(lv: float = level, p: int = pct) -> None:
                 self.rings.set_level(lv)
                 if self.state == VoiceState.LISTENING:
-                    # Prefer calm "Speak now, sir…" — append level only when VU moves
-                    cap = "Speak now, sir…"
-                    if p >= 8:
+                    note = getattr(self.hear, "status_note", None)
+                    backend = getattr(self.hear, "last_backend", None)
+                    if note:
+                        cap = str(note)
+                    elif backend == "windows_sr" and p < 8:
+                        # Native SR has no real sample peak — never "level 0%"
+                        cap = "Speak now, sir… (Windows mic)"
+                    elif p >= 8:
                         cap = f"Speak now, sir… level {p}%"
+                    else:
+                        cap = "Speak now, sir…"
                     self.caption.configure(text=cap, fg="#b0bec5")
                 self._draw()
 
@@ -418,6 +434,8 @@ class JarvisWindow:
                     pass
 
             def finish() -> None:
+                from assistant.voice.platform_io import FLAT_MIC_TIP
+
                 if self.wake is not None and not text:
                     self.wake.set_busy(False)
                 if text and text.strip():
@@ -426,12 +444,23 @@ class JarvisWindow:
                     return
                 peak = float(getattr(self.hear, "last_peak", 0.0) or 0.0)
                 peak_pct = int(max(0, min(100, round(peak * 100))))
-                peak_hint = f" (level {peak_pct}%)" if peak > 0 else ""
+                peak_hint = f" (level {peak_pct}%)" if peak_pct >= 8 else ""
+                # Flat entire Listen (raw peak <1% and VU never moved) → force tip
+                flat_listen = peak < 0.01 and max_vu_pct[0] < 1
                 tip = (
                     "Windows tip: Settings → Privacy → Microphone (allow for apps/"
                     "Python), set default input device, unmute the mic — then Listen again."
                 )
-                if err_kind == "network":
+                if err_kind == "denied":
+                    msg = (
+                        "Microphone denied, sir — allow mic in Windows Privacy → "
+                        "Microphone, then tap Listen again."
+                    )
+                    st = VoiceState.ERROR
+                elif flat_listen or err_kind == "mic":
+                    msg = FLAT_MIC_TIP
+                    st = VoiceState.ERROR
+                elif err_kind == "network":
                     msg = (
                         "Heard audio but couldn’t transcribe "
                         "(need internet for Google STT fallback, or try again louder)"
@@ -442,12 +471,6 @@ class JarvisWindow:
                     msg = (
                         "Heard audio but couldn’t transcribe — try again, or type below."
                         + peak_hint
-                    )
-                    st = VoiceState.ERROR
-                elif err_kind == "denied":
-                    msg = (
-                        "Microphone denied, sir — allow mic in Windows Privacy → "
-                        "Microphone, then tap Listen again."
                     )
                     st = VoiceState.ERROR
                 elif err_kind == "timeout":
@@ -461,26 +484,17 @@ class JarvisWindow:
                         "then speak clearly. " + tip
                     )
                     st = VoiceState.IDLE
-                elif err_kind == "mic" or peak < 1e-4:
-                    msg = (
-                        "Mic level flat, sir — set default input in Windows Sound, "
-                        "unmute, allow Privacy → Microphone."
-                        + peak_hint
-                    )
-                    st = VoiceState.ERROR
                 else:
                     # Peak OK but STT empty / unknown
-                    if peak >= 1e-4:
+                    if peak >= 0.01:
                         msg = (
                             "Heard audio but couldn’t transcribe "
                             "(need internet for Google STT fallback, or try again louder)"
                             + peak_hint
                         )
                     else:
-                        msg = (
-                            "No speech heard, sir — " + tip
-                        )
-                    st = VoiceState.IDLE
+                        msg = FLAT_MIC_TIP
+                    st = VoiceState.IDLE if peak >= 0.01 else VoiceState.ERROR
                 self.set_state(st, msg)
                 self.state_label.configure(text="idle" if st == VoiceState.IDLE else "error")
                 self.root.after(

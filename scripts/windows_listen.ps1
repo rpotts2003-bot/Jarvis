@@ -2,7 +2,7 @@
 # Invoked with: powershell -NoProfile -ExecutionPolicy Bypass -File windows_listen.ps1
 # Prefer -File (not -Command) so quoting stays simple.
 param(
-    [double]$TimeoutSeconds = 8,
+    [double]$TimeoutSeconds = 15,
     [switch]$ProbeOnly
 )
 
@@ -24,7 +24,22 @@ try {
 
 $engine = $null
 try {
-    $engine = New-Object System.Speech.Recognition.SpeechRecognitionEngine
+    # Prefer en-GB then en-US culture when installed; else OS default.
+    $cultureNames = @('en-GB', 'en-US')
+    foreach ($name in $cultureNames) {
+        try {
+            $ci = [System.Globalization.CultureInfo]::GetCultureInfo($name)
+            $engine = New-Object System.Speech.Recognition.SpeechRecognitionEngine $ci
+            break
+        } catch {
+            $engine = $null
+        }
+    }
+    if ($null -eq $engine) {
+        $engine = New-Object System.Speech.Recognition.SpeechRecognitionEngine
+    }
+
+    # Explicit default capture device (shared mode) — fails clearly if privacy/device broken.
     try {
         $engine.SetInputToDefaultAudioDevice()
     } catch {
@@ -36,8 +51,13 @@ try {
     }
 
     if ($ProbeOnly) {
+        $probe = 'ready'
+        try {
+            $cult = $engine.RecognizerInfo.Culture.Name
+            if ($cult) { $probe = "ready;culture=$cult" }
+        } catch {}
         Write-Status 'ok'
-        Write-Output 'JARVIS_SR_PROBE=ready'
+        Write-Output ("JARVIS_SR_PROBE=" + $probe)
         exit 0
     }
 

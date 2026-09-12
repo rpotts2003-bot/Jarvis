@@ -30,10 +30,21 @@ _VAD_WAIT_SPEECH_S = 2.0
 _VAD_SILENCE_END_S = 0.85
 _VAD_MAX_S = 6.5
 _VAD_ENERGY_THRESHOLD = 0.018
-_PTT_DURATION_S = 5.0
-_WAKE_DURATION_S = 3.5
+_PTT_DURATION_S = 15.0
+_WAKE_DURATION_S = 7.0
 _FLAT_PEAK_EPS = 1e-4
 _TARGET_STT_RATE = 16000
+_DEVICE_PROBE_S = 0.3
+_DEVICE_PEAK_OK = 0.008  # ~0.8% |sample| — live enough to prefer this input
+_NATIVE_LISTEN_TIMEOUT_S = 15.0
+_WAKE_NATIVE_TIMEOUT_S = 7.0
+
+# Shown when Listen never sees real mic energy (GUI + fallback finish).
+FLAT_MIC_TIP = (
+    "Mic level flat (0%) — Windows Sound → input device = your laptop mic; "
+    "Privacy → Microphone on; close apps locking the mic (Discord/Zoom); "
+    "then Listen again."
+)
 
 
 def _load_tts_style() -> TtsStyle:
@@ -582,18 +593,218 @@ def _vad_enabled() -> bool:
     return os.environ.get("JARVIS_VAD", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _device_default_samplerate(fallback: int = _TARGET_STT_RATE) -> int:
+def _device_default_samplerate(
+    fallback: int = _TARGET_STT_RATE,
+    *,
+    device: int | None = None,
+) -> int:
     """Best-effort host API default input rate (Windows laptops often 44100/48000)."""
     try:
         import sounddevice as sd  # type: ignore
 
-        dev = sd.query_devices(kind="input")
+        if device is None:
+            dev = sd.query_devices(kind="input")
+        else:
+            dev = sd.query_devices(device)
         rate = int(float(dev.get("default_samplerate") or 0))
         if rate >= 8000:
             return rate
     except Exception:
         pass
     return int(fallback)
+
+
+def _iter_input_devices() -> list[tuple[int, dict]]:
+    """Return (index, device-info) for capture devices."""
+    import sounddevice as sd  # type: ignore
+
+    out: list[tuple[int, dict]] = []
+    try:
+        devices = sd.query_devices()
+        count = len(devices)  # type: ignore[arg-type]
+    except Exception:
+        return out
+    for i in range(count):
+        try:
+            d = sd.query_devices(i)
+        except Exception:
+            continue
+        if not isinstance(d, dict):
+            try:
+                d = dict(d)  # type: ignore[arg-type]
+            except Exception:
+                continue
+        if int(d.get("max_input_channels", 0) or 0) > 0:
+            out.append((i, d))
+    return out
+
+
+def probe_device_peak(
+    device: int | None = None,
+    *,
+    duration_s: float = _DEVICE_PROBE_S,
+) -> tuple[float, str, int]:
+    """Brief capture on one device. Returns (peak, name, sample_rate)."""
+    import numpy as np  # type: ignore
+    import sounddevice as sd  # type: ignore
+
+    name = ""
+    rate = _TARGET_STT_RATE
+    try:
+        info = sd.query_devices(device) if device is not None else sd.query_devices(kind="input")
+        if isinstance(info, dict):
+            name = str(info.get("name") or "")
+            r = int(float(info.get("default_samplerate") or 0))
+            if r >= 8000:
+                rate = r
+    except Exception:
+        pass
+
+    frames = max(1, int(float(duration_s) * rate))
+    try:
+        audio = sd.rec(
+            frames=frames,
+            samplerate=rate,
+            channels=1,
+            dtype="float32",
+            device=device,
+        )
+        sd.wait()
+    except Exception:
+        rate = _TARGET_STT_RATE
+        frames = max(1, int(float(duration_s) * rate))
+        audio = sd.rec(
+            frames=frames,
+            samplerate=rate,
+            channels=1,
+            dtype="float32",
+            device=device,
+        )
+        sd.wait()
+
+    peak = 0.0
+    try:
+        flat = np.asarray(audio, dtype=np.float32).reshape(-1)
+        if flat.size:
+            peak = float(np.max(np.abs(flat)))
+    except Exception:
+        peak = 0.0
+    return peak, name, rate
+
+
+def list_input_peaks(*, duration_s: float = _DEVICE_PROBE_S) -> list[dict]:
+    """Probe every input device briefly (for diagnose)."""
+    rows: list[dict] = []
+    try:
+        devices = _iter_input_devices()
+    except Exception:
+        return rows
+    for idx, info in devices:
+        ch = int(info.get("max_input_channels", 0) or 0)
+        name = str(info.get("name") or f"device-{idx}")
+        try:
+            peak, _, rate = probe_device_peak(idx, duration_s=duration_s)
+            rows.append(
+                {
+                    "index": idx,
+                    "name": name,
+                    "max_input_channels": ch,
+                    "peak": peak,
+                    "sample_rate": rate,
+                }
+            )
+        except Exception as e:  # noqa: BLE001
+            rows.append(
+                {
+                    "index": idx,
+                    "name": name,
+                    "max_input_channels": ch,
+                    "peak": 0.0,
+                    "sample_rate": 0,
+                    "error": str(e)[:160],
+                }
+            )
+    return rows
+
+
+def resolve_input_device(*, force_rescan: bool = False) -> int | None:
+    """Pick a live sounddevice input before PTT; persist index in ui_prefs.
+
+    Prefers saved device if still above threshold, then default input, then the
+    highest-peak remaining device. Returns None for PortAudio default.
+    """
+    try:
+        import sounddevice as sd  # noqa: F401
+    except Exception:
+        return None
+
+    prefs = _load_ui_prefs()
+    saved = prefs.get("input_device_index")
+    saved_idx: int | None
+    try:
+        saved_idx = int(saved) if saved is not None else None
+    except (TypeError, ValueError):
+        saved_idx = None
+
+    def _persist(idx: int | None, name: str, peak: float) -> int | None:
+        payload = {
+            "input_device_index": idx,
+            "input_device_name": name,
+            "input_device_peak": round(float(peak), 6),
+        }
+        _save_ui_prefs(payload)
+        return idx
+
+    # Fast path: saved device still live
+    if not force_rescan and saved_idx is not None:
+        try:
+            peak, name, _rate = probe_device_peak(saved_idx)
+            if peak >= _DEVICE_PEAK_OK:
+                return _persist(saved_idx, name, peak)
+        except Exception:
+            pass
+
+    # Default device first
+    candidates: list[tuple[int | None, str, float]] = []
+    try:
+        peak, name, _rate = probe_device_peak(None)
+        default_idx: int | None = None
+        try:
+            import sounddevice as sd  # type: ignore
+
+            default_idx = sd.default.device[0]  # type: ignore[index]
+            if default_idx is not None:
+                default_idx = int(default_idx)
+        except Exception:
+            default_idx = None
+        candidates.append((default_idx, name, peak))
+        if peak >= _DEVICE_PEAK_OK:
+            return _persist(default_idx, name, peak)
+    except Exception:
+        pass
+
+    # Scan other inputs
+    try:
+        for idx, info in _iter_input_devices():
+            if candidates and candidates[0][0] is not None and idx == candidates[0][0]:
+                continue
+            try:
+                peak, name, _rate = probe_device_peak(idx)
+            except Exception:
+                continue
+            if not name:
+                name = str(info.get("name") or f"device-{idx}")
+            candidates.append((idx, name, peak))
+            if peak >= _DEVICE_PEAK_OK:
+                return _persist(idx, name, peak)
+    except Exception:
+        pass
+
+    # All flat — keep best peak (or PortAudio default) so finish tip can fire
+    if candidates:
+        best = max(candidates, key=lambda t: t[2])
+        return _persist(best[0], best[1], best[2])
+    return None
 
 
 def _resample_to_16k(pcm_f32, src_rate: int):
@@ -640,15 +851,24 @@ def _record_fixed(
     duration: float,
     sample_rate: int,
     on_level: Callable[[float], None] | None,
+    device: int | None = None,
 ):
     """Fixed-window capture. Returns (float32 mono, peak, used_rate)."""
     import numpy as np  # type: ignore
     import sounddevice as sd  # type: ignore
 
+    if device is None:
+        try:
+            device = resolve_input_device()
+        except Exception:
+            device = None
+
     rate = int(sample_rate)
     try:
         frames = int(duration * rate)
-        audio = sd.rec(frames, samplerate=rate, channels=1, dtype="float32")
+        audio = sd.rec(
+            frames, samplerate=rate, channels=1, dtype="float32", device=device
+        )
         # Live-ish VU: poll while recording
         t0 = time.monotonic()
         peak = 0.0
@@ -667,9 +887,11 @@ def _record_fixed(
         sd.wait()
     except Exception:
         # Retry at device native rate (common when 16 kHz is rejected)
-        rate = _device_default_samplerate(rate)
+        rate = _device_default_samplerate(rate, device=device)
         frames = int(duration * rate)
-        audio = sd.rec(frames, samplerate=rate, channels=1, dtype="float32")
+        audio = sd.rec(
+            frames, samplerate=rate, channels=1, dtype="float32", device=device
+        )
         if on_level:
             on_level(0.2)
         sd.wait()
@@ -695,16 +917,25 @@ def _record_vad_ptt(
     wait_speech_s: float = _VAD_WAIT_SPEECH_S,
     silence_end_s: float = _VAD_SILENCE_END_S,
     max_s: float = _VAD_MAX_S,
+    device: int | None = None,
 ):
     """Energy VAD (optional). Returns (float32 mono, peak, heard_speech, used_rate)."""
     import numpy as np  # type: ignore
     import sounddevice as sd  # type: ignore
 
+    if device is None:
+        try:
+            device = resolve_input_device()
+        except Exception:
+            device = None
+
     rate = int(sample_rate)
     try:
-        _ = sd.check_input_settings(samplerate=rate, channels=1, dtype="float32")
+        _ = sd.check_input_settings(
+            device=device, samplerate=rate, channels=1, dtype="float32"
+        )
     except Exception:
-        rate = _device_default_samplerate(rate)
+        rate = _device_default_samplerate(rate, device=device)
 
     frame = max(1, int(_VAD_FRAME_S * rate))
     chunks: list = []
@@ -715,7 +946,13 @@ def _record_vad_ptt(
     flat_streak = 0
     peak = 0.0
 
-    with sd.InputStream(samplerate=rate, channels=1, dtype="float32", blocksize=frame) as stream:
+    with sd.InputStream(
+        device=device,
+        samplerate=rate,
+        channels=1,
+        dtype="float32",
+        blocksize=frame,
+    ) as stream:
         while True:
             data, overflowed = stream.read(frame)  # noqa: F841
             mono = data.reshape(-1)
@@ -851,7 +1088,7 @@ def _make_native_then_google_hear(
     mode: HearMode = "ptt",
     duration_s: float | None = None,
     wait_speech_s: float | None = None,
-    native_timeout_s: float = 8.0,
+    native_timeout_s: float = _NATIVE_LISTEN_TIMEOUT_S,
 ) -> Callable[[], str | None] | None:
     """Listen (ptt): Windows System.Speech first; Google if native unavailable."""
     from assistant.voice.windows_sr import make_windows_sr_hear, native_sr_supported
@@ -863,7 +1100,8 @@ def _make_native_then_google_hear(
         wait_speech_s=wait_speech_s,
     )
     native = None
-    if mode == "ptt" and native_sr_supported():
+    # PTT and wake both prefer Windows SR when available (wake uses shorter timeout).
+    if native_sr_supported():
         native = make_windows_sr_hear(on_level=on_level, timeout_s=native_timeout_s)
     if native is None:
         return google
@@ -874,6 +1112,7 @@ def _make_native_then_google_hear(
         hear.last_error = None  # type: ignore[attr-defined]
         hear.last_peak = 0.0  # type: ignore[attr-defined]
         hear.last_backend = "windows_sr"  # type: ignore[attr-defined]
+        hear.status_note = None  # type: ignore[attr-defined]
         level_cb = hear.on_level  # type: ignore[attr-defined]
         try:
             native.on_level = level_cb  # type: ignore[attr-defined]
@@ -898,21 +1137,41 @@ def _make_native_then_google_hear(
             hear.last_peak = peak or 0.4  # type: ignore[attr-defined]
             hear.last_backend = "windows_sr"  # type: ignore[attr-defined]
             hear.last_error = None  # type: ignore[attr-defined]
+            hear.status_note = None  # type: ignore[attr-defined]
             return str(text).strip()
         # Fall back only when native stack is missing/broken — not on
         # timeout/empty/denied (those already used the default mic).
         if err in (None, "unavailable", "error"):
+            why = err or "unavailable"
+            note = (
+                f"Windows SR {why} — falling back to Google mic…"
+            )
+            hear.status_note = note  # type: ignore[attr-defined]
             hear.last_backend = "google"  # type: ignore[attr-defined]
+            if level_cb:
+                try:
+                    # Nudge GUI caption refresh (no fake loud VU)
+                    level_cb(0.0)
+                except Exception:
+                    pass
             try:
                 gtext = google()
             except PermissionError:
                 hear.last_error = "denied"  # type: ignore[attr-defined]
                 raise
-            hear.last_error = getattr(google, "last_error", None)  # type: ignore[attr-defined]
-            hear.last_peak = float(  # type: ignore[attr-defined]
-                getattr(google, "last_peak", 0.0) or 0.0
-            )
-            return gtext
+            g_err = getattr(google, "last_error", None)
+            g_peak = float(getattr(google, "last_peak", 0.0) or 0.0)
+            hear.last_peak = g_peak  # type: ignore[attr-defined]
+            if gtext:
+                hear.last_error = None  # type: ignore[attr-defined]
+                hear.status_note = None  # type: ignore[attr-defined]
+                return gtext
+            # Flat fallback capture → explicit mic tip
+            if g_peak < 0.01 or g_err == "mic":
+                hear.last_error = "mic"  # type: ignore[attr-defined]
+            else:
+                hear.last_error = g_err  # type: ignore[attr-defined]
+            return None
         hear.last_error = err  # type: ignore[attr-defined]
         hear.last_peak = peak  # type: ignore[attr-defined]
         hear.last_backend = "windows_sr"  # type: ignore[attr-defined]
@@ -921,6 +1180,7 @@ def _make_native_then_google_hear(
     hear.last_error = None  # type: ignore[attr-defined]
     hear.last_peak = 0.0  # type: ignore[attr-defined]
     hear.last_backend = "windows_sr"  # type: ignore[attr-defined]
+    hear.status_note = None  # type: ignore[attr-defined]
     hear.on_level = on_level  # type: ignore[attr-defined]
     hear.mode = mode  # type: ignore[attr-defined]
     return hear
@@ -936,10 +1196,10 @@ def make_mic_hear(
     """Mic hear callable for Listen (ptt) or wake chunks.
 
     mode="ptt" (Listen button): on Windows prefer System.Speech via
-    scripts/windows_listen.ps1 (~8s Recognize); fall back to sounddevice +
+    scripts/windows_listen.ps1 (~15s Recognize); fall back to sounddevice +
     Google STT if native SR is unavailable. Non-Windows uses Google path.
 
-    mode="wake": sounddevice fixed/VAD chunks + Google (fuzzy wake stays here).
+    mode="wake": Windows SR ~7s chunks when available (fuzzy wake in WakeListener); else sounddevice + Google.
 
     Set JARVIS_VAD=1 to use energy-gated capture on the Google path.
     Set JARVIS_FORCE_GOOGLE_STT=1 to skip native Windows SR.
@@ -958,12 +1218,16 @@ def make_mic_hear(
             mode=mode,
             duration_s=duration_s,
             wait_speech_s=wait_speech_s,
+            native_timeout_s=_NATIVE_LISTEN_TIMEOUT_S,
         )
-    return _make_google_mic_hear(
+    # Wake loop: ~7s Windows SR chunks (fuzzy "Jarvis" match in WakeListener);
+    # Google fixed/VAD only if native SR unavailable.
+    return _make_native_then_google_hear(
         on_level=on_level,
         mode=mode,
         duration_s=duration_s,
         wait_speech_s=wait_speech_s,
+        native_timeout_s=_WAKE_NATIVE_TIMEOUT_S,
     )
 
 

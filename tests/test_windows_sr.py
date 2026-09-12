@@ -254,24 +254,41 @@ def test_make_mic_hear_no_fallback_on_timeout(monkeypatch):
     assert calls["google"] == 0
 
 
-def test_wake_mode_skips_native(monkeypatch):
-    """Wake path should not require Windows SR."""
+def test_wake_mode_uses_native_when_available(monkeypatch):
+    """Wake path prefers short Windows SR chunks when native SR is supported."""
     monkeypatch.setattr(windows_sr, "native_sr_supported", lambda: True)
 
-    called = {"native": 0}
+    called = {"native": 0, "timeout_s": None}
 
-    def boom(**kw):
+    def fake_native(*, on_level=None, timeout_s=8.0, runner=None):
         called["native"] += 1
-        raise AssertionError("wake must not call native hear factory")
+        called["timeout_s"] = timeout_s
 
-    monkeypatch.setattr(windows_sr, "make_windows_sr_hear", boom)
+        def hear():
+            hear.last_error = None
+            hear.last_peak = 0.3
+            return "Jarvis what time is it"
 
-    # Without sounddevice deps, google hear returns None — that's fine
+        hear.last_error = None
+        hear.last_peak = 0.0
+        hear.on_level = on_level
+        hear.last_backend = "windows_sr"
+        return hear
+
+    monkeypatch.setattr(windows_sr, "make_windows_sr_hear", fake_native)
+    monkeypatch.setattr(
+        "assistant.voice.platform_io._make_google_mic_hear",
+        lambda **kw: None,
+    )
+
     hear = make_mic_hear(mode="wake")
-    # Either None (no deps) or a google callable — never native-first wrapper
-    if hear is not None:
-        assert getattr(hear, "last_backend", "google") == "google"
-    assert called["native"] == 0
+    assert hear is not None
+    assert called["native"] == 1
+    # Wake native timeout should be shorter than Listen (~7s, not 15s)
+    assert called["timeout_s"] is not None
+    assert 5.0 <= float(called["timeout_s"]) <= 9.0
+    assert hear() == "Jarvis what time is it"
+    assert getattr(hear, "last_backend", None) == "windows_sr"
 
 
 def test_run_windows_listen_missing_script(monkeypatch):

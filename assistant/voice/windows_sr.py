@@ -24,7 +24,7 @@ STATUS_MIC = "mic"
 STATUS_UNAVAILABLE = "unavailable"
 STATUS_ERROR = "error"
 
-_NATIVE_TIMEOUT_S = 8.0
+_NATIVE_TIMEOUT_S = 15.0
 _LINE_STATUS = re.compile(r"^JARVIS_SR_STATUS=(.*)$")
 _LINE_TEXT = re.compile(r"^JARVIS_SR_TEXT=(.*)$")
 _LINE_ERROR = re.compile(r"^JARVIS_SR_ERROR=(.*)$")
@@ -220,21 +220,17 @@ def recognize_native(
     """Recognize one utterance. Returns (text, error_kind).
 
     error_kind is None on success; otherwise timeout|empty|denied|mic|unavailable|error.
+
+    Does not fake VU levels — native SR has no sample peak; GUI shows
+    "(Windows mic)" instead of "level 0%".
     """
-    if on_level:
-        try:
-            on_level(0.35)
-        except Exception:
-            pass
+    # Intentionally do not call on_level with placeholder peaks (0.35/0.55).
+    # Fake levels made captions show bogus % and hid flat-mic failures.
+    _ = on_level  # reserved for future real meter if SR exposes audio
     parsed = run_windows_listen(timeout_s=timeout_s, probe_only=False, runner=runner)
     status = (parsed.get("status") or STATUS_ERROR).strip().lower()
     text = (parsed.get("text") or "").strip()
     if status == STATUS_OK and text:
-        if on_level:
-            try:
-                on_level(0.55)
-            except Exception:
-                pass
         return text, None
     if status == STATUS_OK and not text:
         return None, STATUS_EMPTY

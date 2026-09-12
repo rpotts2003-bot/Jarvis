@@ -53,9 +53,9 @@ Also: `next time I say downloads, do open chrome` · `remember that my name is R
 
 Speech uses free neural UK male via Edge TTS (`en-GB-RyanNeural`, needs internet); offline falls back to Windows SAPI (*George*). Soft tip: UK speech pack still helps the offline fallback.
 
-**Listen** on Windows uses **Windows Speech Recognition** (`System.Speech` via `scripts/windows_listen.ps1`) with the OS default microphone when available; it falls back to `sounddevice` + Google STT if native SR is unavailable. Allow microphone access in **Settings → Privacy → Microphone** for apps / Python, set your laptop mic as the default input device, and unmute it.
+**Listen** on Windows uses **Windows Speech Recognition** (`System.Speech` via `scripts/windows_listen.ps1`, en-GB/en-US) with the OS default microphone when available; it falls back to `sounddevice` + Google STT if native SR is unavailable. The Google path auto-picks a live input device (saved in `ui_prefs`). Allow microphone access in **Settings → Privacy → Microphone** for apps / Python, set your laptop mic as the default input device, unmute it, and close apps that lock the mic (Discord/Zoom).
 
-Jarvis also listens after you say its name (`Jarvis` by default), or tap **Listen** on the HUD for one command without the wake word. Use **Mute** to silence the mic. Typed replies are spoken aloud. Typing always works if the mic fails.
+Jarvis also listens after you say its name (`Jarvis` by default) — wake uses the same Windows Speech path in ~7s chunks (fuzzy name match at the start only; Mute hard-blocks). Tap **Listen** on the HUD for one ~15s command without the wake word. Typed replies are spoken aloud. Typing always works if the mic fails.
 
 Say `diagnose` or `test mic`, or use **Test mic** on the HUD (`scripts/diagnose_mic.py` also probes native Windows SR).
 

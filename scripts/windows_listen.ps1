@@ -1,17 +1,20 @@
-# Jarvis — Windows Speech Recognition (System.Speech) for Listen / diagnose.
+# Jarvis — Windows Speech Recognition (System.Speech) for Listen / wake / diagnose.
 # Invoked with: powershell -NoProfile -ExecutionPolicy Bypass -File windows_listen.ps1
 # Prefer -File (not -Command) so quoting stays simple.
 param(
     [double]$TimeoutSeconds = 15,
+    [ValidateSet('listen', 'wake')]
+    [string]$Mode = 'listen',
     [switch]$ProbeOnly
 )
 
 $ErrorActionPreference = 'Stop'
 $OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 
-function Write-Status([string]$Status, [string]$Text = '', [string]$ErrorMsg = '') {
+function Write-Status([string]$Status, [string]$Text = '', [string]$ErrorMsg = '', [string]$Conf = '') {
     Write-Output ("JARVIS_SR_STATUS=" + $Status)
     if ($Text -ne '') { Write-Output ("JARVIS_SR_TEXT=" + $Text) }
+    if ($Conf -ne '') { Write-Output ("JARVIS_SR_CONF=" + $Conf) }
     if ($ErrorMsg -ne '') { Write-Output ("JARVIS_SR_ERROR=" + $ErrorMsg) }
 }
 
@@ -61,8 +64,31 @@ try {
         exit 0
     }
 
+    # Silence / babble timeouts: listen tolerates brief pauses; wake ends sooner.
+    if ($Mode -eq 'wake') {
+        $engine.InitialSilenceTimeout = [TimeSpan]::FromSeconds(2.0)
+        $engine.BabbleTimeout = [TimeSpan]::FromSeconds(2.0)
+        $engine.EndSilenceTimeout = [TimeSpan]::FromSeconds(0.9)
+    } else {
+        # Listen / dictation: don't cut mid-phrase on short pauses
+        $engine.InitialSilenceTimeout = [TimeSpan]::FromSeconds(3.5)
+        $engine.BabbleTimeout = [TimeSpan]::FromSeconds(3.0)
+        $engine.EndSilenceTimeout = [TimeSpan]::FromSeconds(1.4)
+    }
+
+    try {
+        $engine.MaxAlternates = 5
+    } catch {}
+
+    # Primary free-form dictation
     $grammar = New-Object System.Speech.Recognition.DictationGrammar
     $engine.LoadGrammar($grammar)
+
+    # Optional spelling dictation (helps some letter/number phrases); ignore if unavailable
+    try {
+        $spell = New-Object System.Speech.Recognition.DictationGrammar 'grammar:dictation#spelling'
+        $engine.LoadGrammar($spell)
+    } catch {}
 
     $ts = [TimeSpan]::FromSeconds([Math]::Max(1.0, [double]$TimeoutSeconds))
     $result = $engine.Recognize($ts)
@@ -72,13 +98,27 @@ try {
         exit 1
     }
 
-    $text = [string]$result.Text
+    # Prefer highest-confidence alternate when available
+    $best = $result
+    $bestConf = [double]$result.Confidence
+    try {
+        foreach ($alt in $result.Alternates) {
+            $c = [double]$alt.Confidence
+            if ($c -gt $bestConf -and -not [string]::IsNullOrWhiteSpace([string]$alt.Text)) {
+                $best = $alt
+                $bestConf = $c
+            }
+        }
+    } catch {}
+
+    $text = [string]$best.Text
     if ([string]::IsNullOrWhiteSpace($text)) {
         Write-Status 'empty'
         exit 1
     }
 
-    Write-Status 'ok' -Text $text.Trim()
+    $confStr = ('{0:0.###}' -f $bestConf)
+    Write-Status 'ok' -Text $text.Trim() -Conf $confStr
     exit 0
 } catch {
     $msg = $_.Exception.Message

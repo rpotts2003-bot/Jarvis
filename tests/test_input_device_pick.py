@@ -32,13 +32,14 @@ def test_recognize_native_no_fake_vu(monkeypatch, tmp_path):
             returncode=0,
         )
 
-    text, err = windows_sr.recognize_native(
+    text, err, conf = windows_sr.recognize_native(
         timeout_s=3.0,
         on_level=levels.append,
         runner=runner,
     )
     assert text == "hello"
     assert err is None
+    assert conf is None
     assert levels == []  # no fake 0.35/0.55
 
 
@@ -85,7 +86,7 @@ def test_resolve_input_device_prefers_live(monkeypatch, tmp_path):
 
 
 def test_fallback_sets_status_note(monkeypatch):
-    def fake_native_hear_factory(*, on_level=None, timeout_s=8.0, runner=None):
+    def fake_native_hear_factory(*, on_level=None, timeout_s=8.0, mode="listen", runner=None):
         def hear():
             hear.last_error = "unavailable"
             hear.last_peak = 0.0

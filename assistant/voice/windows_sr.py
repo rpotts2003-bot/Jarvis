@@ -13,7 +13,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Literal
 
 # Status strings mirrored from scripts/windows_listen.ps1
 STATUS_OK = "ok"
@@ -24,11 +24,14 @@ STATUS_MIC = "mic"
 STATUS_UNAVAILABLE = "unavailable"
 STATUS_ERROR = "error"
 
+SrMode = Literal["listen", "wake"]
+
 _NATIVE_TIMEOUT_S = 15.0
 _LINE_STATUS = re.compile(r"^JARVIS_SR_STATUS=(.*)$")
 _LINE_TEXT = re.compile(r"^JARVIS_SR_TEXT=(.*)$")
 _LINE_ERROR = re.compile(r"^JARVIS_SR_ERROR=(.*)$")
 _LINE_PROBE = re.compile(r"^JARVIS_SR_PROBE=(.*)$")
+_LINE_CONF = re.compile(r"^JARVIS_SR_CONF=(.*)$")
 
 
 def _repo_root() -> Path:
@@ -126,6 +129,10 @@ def _parse_sr_output(stdout: str) -> dict[str, str]:
         if m:
             out["probe"] = m.group(1).strip()
             continue
+        m = _LINE_CONF.match(line)
+        if m:
+            out["confidence"] = m.group(1).strip()
+            continue
     return out
 
 
@@ -133,11 +140,12 @@ def run_windows_listen(
     *,
     timeout_s: float = _NATIVE_TIMEOUT_S,
     probe_only: bool = False,
+    mode: SrMode = "listen",
     runner: Callable[..., subprocess.CompletedProcess] | None = None,
 ) -> dict[str, str]:
     """Invoke windows_listen.ps1. Returns parsed status dict.
 
-    Keys: status, text?, error?, probe?
+    Keys: status, text?, error?, probe?, confidence?
     status may be: ok|timeout|empty|denied|mic|unavailable|error
     """
     script = windows_listen_script_path()
@@ -148,6 +156,7 @@ def run_windows_listen(
             "error": "powershell or windows_listen.ps1 missing",
         }
 
+    use_mode: SrMode = "wake" if mode == "wake" else "listen"
     cmd = [
         ps,
         "-NoProfile",
@@ -157,6 +166,8 @@ def run_windows_listen(
         str(script),
         "-TimeoutSeconds",
         str(float(timeout_s)),
+        "-Mode",
+        use_mode,
     ]
     if probe_only:
         cmd.append("-ProbeOnly")
@@ -214,12 +225,14 @@ def probe_native_sr(
 def recognize_native(
     *,
     timeout_s: float = _NATIVE_TIMEOUT_S,
+    mode: SrMode = "listen",
     on_level: Callable[[float], None] | None = None,
     runner: Callable[..., subprocess.CompletedProcess] | None = None,
-) -> tuple[str | None, str | None]:
-    """Recognize one utterance. Returns (text, error_kind).
+) -> tuple[str | None, str | None, float | None]:
+    """Recognize one utterance. Returns (text, error_kind, confidence).
 
     error_kind is None on success; otherwise timeout|empty|denied|mic|unavailable|error.
+    confidence is 0..1 when the helper emitted JARVIS_SR_CONF=, else None.
 
     Does not fake VU levels — native SR has no sample peak; GUI shows
     "(Windows mic)" instead of "level 0%".
@@ -227,13 +240,22 @@ def recognize_native(
     # Intentionally do not call on_level with placeholder peaks (0.35/0.55).
     # Fake levels made captions show bogus % and hid flat-mic failures.
     _ = on_level  # reserved for future real meter if SR exposes audio
-    parsed = run_windows_listen(timeout_s=timeout_s, probe_only=False, runner=runner)
+    parsed = run_windows_listen(
+        timeout_s=timeout_s, probe_only=False, mode=mode, runner=runner
+    )
     status = (parsed.get("status") or STATUS_ERROR).strip().lower()
     text = (parsed.get("text") or "").strip()
+    conf: float | None = None
+    raw_conf = (parsed.get("confidence") or "").strip()
+    if raw_conf:
+        try:
+            conf = float(raw_conf)
+        except ValueError:
+            conf = None
     if status == STATUS_OK and text:
-        return text, None
+        return text, None, conf
     if status == STATUS_OK and not text:
-        return None, STATUS_EMPTY
+        return None, STATUS_EMPTY, conf
     # Map unknown statuses to error
     if status not in {
         STATUS_TIMEOUT,
@@ -244,13 +266,14 @@ def recognize_native(
         STATUS_ERROR,
     }:
         status = STATUS_ERROR
-    return None, status
+    return None, status, conf
 
 
 def make_windows_sr_hear(
     *,
     on_level: Callable[[float], None] | None = None,
     timeout_s: float = _NATIVE_TIMEOUT_S,
+    mode: SrMode = "listen",
     runner: Callable[..., subprocess.CompletedProcess] | None = None,
 ) -> Callable[[], str | None] | None:
     """Callable hear() using native Windows SR, or None if unsupported."""
@@ -260,13 +283,16 @@ def make_windows_sr_hear(
     def hear() -> str | None:
         hear.last_error = None  # type: ignore[attr-defined]
         hear.last_peak = 0.0  # type: ignore[attr-defined]
+        hear.last_confidence = None  # type: ignore[attr-defined]
         hear.last_backend = "windows_sr"  # type: ignore[attr-defined]
         level_cb = hear.on_level  # type: ignore[attr-defined]
-        text, err = recognize_native(
+        text, err, conf = recognize_native(
             timeout_s=float(hear.timeout_s),  # type: ignore[attr-defined]
+            mode=hear.sr_mode,  # type: ignore[attr-defined]
             on_level=level_cb,
             runner=runner,
         )
+        hear.last_confidence = conf  # type: ignore[attr-defined]
         if text:
             hear.last_peak = 0.4  # type: ignore[attr-defined]
             return text
@@ -275,8 +301,10 @@ def make_windows_sr_hear(
 
     hear.last_error = None  # type: ignore[attr-defined]
     hear.last_peak = 0.0  # type: ignore[attr-defined]
+    hear.last_confidence = None  # type: ignore[attr-defined]
     hear.last_backend = "windows_sr"  # type: ignore[attr-defined]
     hear.on_level = on_level  # type: ignore[attr-defined]
-    hear.mode = "ptt"  # type: ignore[attr-defined]
+    hear.mode = "ptt" if mode == "listen" else "wake"  # type: ignore[attr-defined]
+    hear.sr_mode = mode  # type: ignore[attr-defined]
     hear.timeout_s = timeout_s  # type: ignore[attr-defined]
     return hear

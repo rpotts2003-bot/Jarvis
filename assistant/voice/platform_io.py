@@ -1090,7 +1090,12 @@ def _make_native_then_google_hear(
     wait_speech_s: float | None = None,
     native_timeout_s: float = _NATIVE_LISTEN_TIMEOUT_S,
 ) -> Callable[[], str | None] | None:
-    """Listen (ptt): Windows System.Speech first; Google if native unavailable."""
+    """Listen (ptt): Windows System.Speech first; Google if native unavailable.
+
+    On Listen (ptt), also try one Google pass after timeout/empty — user tapped
+    Listen so there is likely speech that Windows SR missed/cut. Wake chunks stay
+    Windows-first without that retry (latency).
+    """
     from assistant.voice.windows_sr import make_windows_sr_hear, native_sr_supported
 
     google = _make_google_mic_hear(
@@ -1101,8 +1106,13 @@ def _make_native_then_google_hear(
     )
     native = None
     # PTT and wake both prefer Windows SR when available (wake uses shorter timeout).
+    sr_mode = "wake" if mode == "wake" else "listen"
     if native_sr_supported():
-        native = make_windows_sr_hear(on_level=on_level, timeout_s=native_timeout_s)
+        native = make_windows_sr_hear(
+            on_level=on_level,
+            timeout_s=native_timeout_s,
+            mode=sr_mode,  # type: ignore[arg-type]
+        )
     if native is None:
         return google
     if google is None:
@@ -1111,6 +1121,7 @@ def _make_native_then_google_hear(
     def hear() -> str | None:
         hear.last_error = None  # type: ignore[attr-defined]
         hear.last_peak = 0.0  # type: ignore[attr-defined]
+        hear.last_confidence = None  # type: ignore[attr-defined]
         hear.last_backend = "windows_sr"  # type: ignore[attr-defined]
         hear.status_note = None  # type: ignore[attr-defined]
         level_cb = hear.on_level  # type: ignore[attr-defined]
@@ -1133,19 +1144,24 @@ def _make_native_then_google_hear(
                 pass
         err = getattr(native, "last_error", None)
         peak = float(getattr(native, "last_peak", 0.0) or 0.0)
+        conf = getattr(native, "last_confidence", None)
         if text and str(text).strip():
             hear.last_peak = peak or 0.4  # type: ignore[attr-defined]
+            hear.last_confidence = conf  # type: ignore[attr-defined]
             hear.last_backend = "windows_sr"  # type: ignore[attr-defined]
             hear.last_error = None  # type: ignore[attr-defined]
             hear.status_note = None  # type: ignore[attr-defined]
             return str(text).strip()
-        # Fall back only when native stack is missing/broken — not on
-        # timeout/empty/denied (those already used the default mic).
-        if err in (None, "unavailable", "error"):
+        # Fall back when native stack is missing/broken, or (Listen only) when
+        # timeout/empty — user pressed Listen so treat as speech evidence and
+        # give Google one shot without abandoning Windows-first on success.
+        allow_speech_retry = mode == "ptt" and err in ("timeout", "empty")
+        if err in (None, "unavailable", "error") or allow_speech_retry:
             why = err or "unavailable"
-            note = (
-                f"Windows SR {why} — falling back to Google mic…"
-            )
+            if allow_speech_retry:
+                note = f"Windows SR {why} — one Google retry…"
+            else:
+                note = f"Windows SR {why} — falling back to Google mic…"
             hear.status_note = note  # type: ignore[attr-defined]
             hear.last_backend = "google"  # type: ignore[attr-defined]
             if level_cb:
@@ -1162,6 +1178,7 @@ def _make_native_then_google_hear(
             g_err = getattr(google, "last_error", None)
             g_peak = float(getattr(google, "last_peak", 0.0) or 0.0)
             hear.last_peak = g_peak  # type: ignore[attr-defined]
+            hear.last_confidence = None  # type: ignore[attr-defined]
             if gtext:
                 hear.last_error = None  # type: ignore[attr-defined]
                 hear.status_note = None  # type: ignore[attr-defined]
@@ -1170,15 +1187,18 @@ def _make_native_then_google_hear(
             if g_peak < 0.01 or g_err == "mic":
                 hear.last_error = "mic"  # type: ignore[attr-defined]
             else:
-                hear.last_error = g_err  # type: ignore[attr-defined]
+                # Prefer original Windows status when Google also failed quietly
+                hear.last_error = err if allow_speech_retry and not g_err else g_err  # type: ignore[attr-defined]
             return None
         hear.last_error = err  # type: ignore[attr-defined]
         hear.last_peak = peak  # type: ignore[attr-defined]
+        hear.last_confidence = conf  # type: ignore[attr-defined]
         hear.last_backend = "windows_sr"  # type: ignore[attr-defined]
         return None
 
     hear.last_error = None  # type: ignore[attr-defined]
     hear.last_peak = 0.0  # type: ignore[attr-defined]
+    hear.last_confidence = None  # type: ignore[attr-defined]
     hear.last_backend = "windows_sr"  # type: ignore[attr-defined]
     hear.status_note = None  # type: ignore[attr-defined]
     hear.on_level = on_level  # type: ignore[attr-defined]
@@ -1197,7 +1217,8 @@ def make_mic_hear(
 
     mode="ptt" (Listen button): on Windows prefer System.Speech via
     scripts/windows_listen.ps1 (~15s Recognize); fall back to sounddevice +
-    Google STT if native SR is unavailable. Non-Windows uses Google path.
+    Google STT if native SR is unavailable, or once after timeout/empty.
+    Non-Windows uses Google path.
 
     mode="wake": Windows SR ~7s chunks when available (fuzzy wake in WakeListener); else sounddevice + Google.
 

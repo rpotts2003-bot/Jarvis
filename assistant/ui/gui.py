@@ -439,8 +439,20 @@ class JarvisWindow:
                 if self.wake is not None and not text:
                     self.wake.set_busy(False)
                 if text and text.strip():
-                    # Same speak path as typing after transcript (off Tk thread)
-                    self._handle_voice_command(text.strip())
+                    heard = text.strip()
+                    # Brief caption so user can spot mis-hears before thinking/submit
+                    display = heard if len(heard) <= 64 else (heard[:61].rstrip() + "…")
+                    self.set_state(
+                        VoiceState.LISTENING,
+                        f"Heard: {display}",
+                        level=0.45,
+                    )
+                    self.state_label.configure(text="heard")
+
+                    def _go(cmd: str = heard) -> None:
+                        self._handle_voice_command(cmd)
+
+                    self.root.after(1300, _go)
                     return
                 peak = float(getattr(self.hear, "last_peak", 0.0) or 0.0)
                 peak_pct = int(max(0, min(100, round(peak * 100))))

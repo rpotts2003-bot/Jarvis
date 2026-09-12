@@ -48,15 +48,15 @@ class WakeConfig:
     # VAD / timeouts (seconds)
     preroll_s: float = 0.4  # 300–500 ms
     end_silence_s: float = 0.8  # 700–900 ms
-    no_speech_timeout_s: float = 5.5  # 5–6 s
+    no_speech_timeout_s: float = 10.0  # post-wake wait for first speech (~10–12 s)
     max_utterance_s: float = 18.0  # 15–20 s
     min_speech_s: float = 0.15  # ignore spikes <~150 ms
     energy_floor: float = 0.08  # adaptive baseline offset
     wake_confidence_min: float = 0.72
     wake_debounce_s: float = 1.2  # 1.0–1.5 s
     poll_s: float = 0.05
-    # legacy alias used by older callers
-    followup_window_s: float = 6.0
+    # Post-wake command capture window (Windows SR / Google Listen path)
+    followup_window_s: float = 12.0
 
 
 @dataclass
@@ -350,13 +350,26 @@ class WakeListener:
         self._emit("listening")
         hear_cmd = self.hear_command or self.hear
         if hear_cmd:
-            # Prefer longer no-speech wait on post-wake hear when supported
+            # Prefer longer no-speech wait / Recognize window on post-wake hear
             prev_wait = getattr(hear_cmd, "wait_speech_s", None)
+            prev_timeout = getattr(hear_cmd, "timeout_s", None)
+            target_win = max(
+                float(self.config.no_speech_timeout_s),
+                float(self.config.followup_window_s),
+                10.0,
+            )
             try:
                 if hasattr(hear_cmd, "wait_speech_s"):
                     hear_cmd.wait_speech_s = max(  # type: ignore[attr-defined]
                         float(getattr(hear_cmd, "wait_speech_s", 0) or 0),
-                        float(self.config.no_speech_timeout_s),
+                        target_win,
+                    )
+                # Windows SR path: ensure Recognize timeout is ~10–15s for the command
+                if hasattr(hear_cmd, "timeout_s"):
+                    hear_cmd.timeout_s = max(  # type: ignore[attr-defined]
+                        float(getattr(hear_cmd, "timeout_s", 0) or 0),
+                        min(15.0, target_win if target_win >= 10.0 else 12.0),
+                        12.0,
                     )
                 # Brief grace so user can start speaking after hearing the wake chime/HUD
                 time.sleep(0.35)
@@ -364,6 +377,8 @@ class WakeListener:
             finally:
                 if prev_wait is not None and hasattr(hear_cmd, "wait_speech_s"):
                     hear_cmd.wait_speech_s = prev_wait  # type: ignore[attr-defined]
+                if prev_timeout is not None and hasattr(hear_cmd, "timeout_s"):
+                    hear_cmd.timeout_s = prev_timeout  # type: ignore[attr-defined]
             if follow:
                 if self.pipeline.wake_at_start(follow):
                     follow = self.pipeline.strip_wake(follow)

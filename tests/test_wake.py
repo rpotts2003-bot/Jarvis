@@ -92,3 +92,52 @@ def test_vad_alone_never_opens_listening():
     # energy while idle must not change phase
     assert p.feed_energy(0.9, 0.1) is None
     assert p.phase == WakePhase.IDLE_ARMED
+
+
+def test_fuzzy_wake_variants():
+    p = WakePipeline(config=WakeConfig(wake_name="Jarvis"))
+    assert p.wake_at_start("jarves")
+    assert p.wake_at_start("Jervis open notepad")
+    assert p.wake_at_start("jarvies")
+    assert p.wake_at_start("Jarvis's status")
+    assert p.strip_wake("jarves what time is it") == "what time is it"
+    assert p.strip_wake("hey jarvis what time is it") == "what time is it"
+    assert p.strip_wake("ok jarvis play music") == "play music"
+    # mid-sentence still rejected
+    assert not p.wake_at_start("please Jarvis help")
+    assert p.try_wake("please Jarvis help", confidence=1.0) is False
+
+
+def test_hey_jarvis_command_via_listener():
+    w = WakeListener(config=WakeConfig(wake_name="Jarvis", wake_debounce_s=0.0))
+    assert w.handle_transcript("hey jarvis what time is it") == "what time is it"
+    w.pipeline.cancel_to_idle()
+    w.pipeline.last_wake_at = 0.0
+    assert w.handle_transcript("JARVES set a timer") == "set a timer"
+
+
+def test_bare_wake_uses_hear_command():
+    calls = {"n": 0}
+
+    def follow():
+        calls["n"] += 1
+        return "what time is it"
+
+    states: list[str] = []
+    w = WakeListener(
+        config=WakeConfig(wake_name="Jarvis", wake_debounce_s=0.0),
+        hear_command=follow,
+        on_state=states.append,
+    )
+    # Avoid real sleep grace in unit test by monkeypatching time.sleep? keep short — wake sleeps 0.35s
+    import assistant.voice.wake as wake_mod
+
+    real_sleep = wake_mod.time.sleep
+    wake_mod.time.sleep = lambda _s: None
+    try:
+        assert w.handle_transcript("Jarvis") == "what time is it"
+    finally:
+        wake_mod.time.sleep = real_sleep
+    assert calls["n"] == 1
+    assert "wake" in states
+    assert "listening" in states

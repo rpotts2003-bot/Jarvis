@@ -87,7 +87,7 @@ def gui_loop() -> None:
         return turn.reply or ""
 
     status_bits = ["chat:OpenAI" if cloud_chat_enabled() else "chat:offline"]
-    # Listen button: energy VAD (ptt). Wake loop: shorter fixed chunk.
+    # Listen button: fixed ~5s (ptt). Wake loop: shorter fixed chunk. JARVIS_VAD=1 for energy gate.
     hear_ptt = make_mic_hear(mode="ptt")
     hear_wake = make_mic_hear(mode="wake")
     hear = hear_ptt
@@ -98,10 +98,13 @@ def gui_loop() -> None:
 
     wake = None
     if always:
+        # Post-wake command capture: slightly longer fixed window (~6s) so bare
+        # "Jarvis" + follow-up question is not abandoned mid-utterance.
+        hear_cmd = make_mic_hear(mode="ptt", duration_s=6.0) or hear_ptt
         wake = WakeListener(
             config=WakeConfig(wake_name=str(wake_name)),
             hear=hear_wake or hear_ptt,
-            hear_command=hear_ptt,
+            hear_command=hear_cmd,
         )
 
         def _mic_err(msg: str) -> None:

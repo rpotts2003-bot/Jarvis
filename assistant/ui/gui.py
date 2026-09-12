@@ -387,6 +387,8 @@ class JarvisWindow:
                     # Same speak path as typing after transcript
                     self._handle_voice_command(text.strip())
                     return
+                peak = float(getattr(self.hear, "last_peak", 0.0) or 0.0)
+                peak_hint = f" (mic peak {peak:.3f})" if peak > 0 else ""
                 if err_kind == "network":
                     msg = "Need internet for speech recognition — check connection, then tap Listen."
                     st = VoiceState.ERROR
@@ -397,11 +399,23 @@ class JarvisWindow:
                     msg = "Microphone denied — enable mic privacy, then try Listen again."
                     st = VoiceState.ERROR
                 elif err_kind == "mic":
-                    msg = "No mic signal — check Windows mic / unmute, then Test mic."
+                    msg = (
+                        "Didn't catch that (mic level flat — check Mute / Windows mic)"
+                        + peak_hint
+                    )
                     st = VoiceState.ERROR
                 else:
-                    # unknown / didn't catch speech energy
-                    msg = "Didn't catch that — tap Listen and speak clearly"
+                    # unknown / Google heard nothing useful
+                    if peak < 1e-4:
+                        msg = (
+                            "Didn't catch that (mic level flat — check Mute / Windows mic)"
+                            + peak_hint
+                        )
+                    else:
+                        msg = (
+                            "Didn't catch that — tap Listen and speak clearly"
+                            + peak_hint
+                        )
                     st = VoiceState.IDLE
                 self.set_state(st, msg)
                 self.state_label.configure(text="idle" if st == VoiceState.IDLE else "error")
@@ -465,9 +479,15 @@ class JarvisWindow:
                     self.set_state(VoiceState.IDLE, self._armed_caption)
                     self.state_label.configure(text="idle · wake armed")
             elif state == "wake":
-                self.set_state(VoiceState.LISTENING, "Heard Jarvis…", level=0.5)
+                self.set_state(VoiceState.LISTENING, "Listening… Go ahead.", level=0.5)
+                self.state_label.configure(text="listening")
             elif state == "listening":
-                self.set_state(VoiceState.LISTENING, level=0.2)
+                self.set_state(
+                    VoiceState.LISTENING,
+                    "Listening for command…",
+                    level=0.35,
+                )
+                self.state_label.configure(text="listening")
             elif state == "busy":
                 self.set_state(VoiceState.THINKING)
             elif state == "idle_timeout":

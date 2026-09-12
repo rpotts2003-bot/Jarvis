@@ -23,13 +23,17 @@ from assistant.voice.tts_style import (
 
 HearMode = Literal["wake", "ptt"]
 
-# VAD defaults (PTT Listen path)
+# Recording defaults — Listen (ptt) uses fixed window by default (reliable on quiet laptop mics).
+# Energy VAD is opt-in via JARVIS_VAD=1 (secondary path).
 _VAD_FRAME_S = 0.05
 _VAD_WAIT_SPEECH_S = 2.0
 _VAD_SILENCE_END_S = 0.85
 _VAD_MAX_S = 6.5
 _VAD_ENERGY_THRESHOLD = 0.018
-_WAKE_DURATION_S = 2.5
+_PTT_DURATION_S = 5.0
+_WAKE_DURATION_S = 3.5
+_FLAT_PEAK_EPS = 1e-4
+_TARGET_STT_RATE = 16000
 
 
 def _load_tts_style() -> TtsStyle:
@@ -574,6 +578,46 @@ def make_tts() -> TTSAdapter:
 # ---------------------------------------------------------------------------
 
 
+def _vad_enabled() -> bool:
+    return os.environ.get("JARVIS_VAD", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _device_default_samplerate(fallback: int = _TARGET_STT_RATE) -> int:
+    """Best-effort host API default input rate (Windows laptops often 44100/48000)."""
+    try:
+        import sounddevice as sd  # type: ignore
+
+        dev = sd.query_devices(kind="input")
+        rate = int(float(dev.get("default_samplerate") or 0))
+        if rate >= 8000:
+            return rate
+    except Exception:
+        pass
+    return int(fallback)
+
+
+def _resample_to_16k(pcm_f32, src_rate: int):
+    """Linear-resample float mono to 16 kHz for Google STT when needed."""
+    import numpy as np  # type: ignore
+
+    src = np.asarray(pcm_f32, dtype=np.float32).reshape(-1)
+    if src_rate == _TARGET_STT_RATE or src.size == 0:
+        return src, _TARGET_STT_RATE
+    duration = src.size / float(src_rate)
+    dst_len = max(1, int(round(duration * _TARGET_STT_RATE)))
+    x_old = np.linspace(0.0, 1.0, num=src.size, endpoint=False)
+    x_new = np.linspace(0.0, 1.0, num=dst_len, endpoint=False)
+    dst = np.interp(x_new, x_old, src).astype(np.float32)
+    return dst, _TARGET_STT_RATE
+
+
+def _float_to_pcm16(flat) -> bytes:
+    import numpy as np  # type: ignore
+
+    clipped = np.clip(np.asarray(flat, dtype=np.float32), -1.0, 1.0)
+    return (clipped * 32767.0).astype(np.int16).tobytes()
+
+
 def _recognize_google(recognizer, pcm_bytes: bytes, sample_rate: int, hear_fn) -> str | None:
     import speech_recognition as sr  # type: ignore
 
@@ -597,23 +641,50 @@ def _record_fixed(
     sample_rate: int,
     on_level: Callable[[float], None] | None,
 ):
+    """Fixed-window capture. Returns (float32 mono, peak, used_rate)."""
     import numpy as np  # type: ignore
     import sounddevice as sd  # type: ignore
 
-    frames = int(duration * sample_rate)
-    audio = sd.rec(frames, samplerate=sample_rate, channels=1, dtype="float32")
-    # Rough mid-record VU
+    rate = int(sample_rate)
+    try:
+        frames = int(duration * rate)
+        audio = sd.rec(frames, samplerate=rate, channels=1, dtype="float32")
+        # Live-ish VU: poll while recording
+        t0 = time.monotonic()
+        peak = 0.0
+        while time.monotonic() - t0 < duration:
+            time.sleep(0.05)
+            if audio is not None and getattr(audio, "size", 0):
+                # Partial buffer may still be filling; peek written region best-effort
+                try:
+                    cur = float(np.max(np.abs(audio)))
+                    if cur > peak:
+                        peak = cur
+                except Exception:
+                    pass
+            if on_level:
+                on_level(level_from_rms(peak / 2.0 if peak else 0.05))
+        sd.wait()
+    except Exception:
+        # Retry at device native rate (common when 16 kHz is rejected)
+        rate = _device_default_samplerate(rate)
+        frames = int(duration * rate)
+        audio = sd.rec(frames, samplerate=rate, channels=1, dtype="float32")
+        if on_level:
+            on_level(0.2)
+        sd.wait()
+        peak = 0.0
+
+    flat = np.zeros(0, dtype=np.float32)
+    if audio is not None:
+        flat = np.clip(np.asarray(audio, dtype=np.float32).reshape(-1), -1.0, 1.0)
+        try:
+            peak = float(np.max(np.abs(flat))) if flat.size else 0.0
+        except Exception:
+            peak = 0.0
     if on_level:
-        on_level(0.25)
-    sd.wait()
-    if on_level:
-        peak = float(np.max(np.abs(audio))) if audio is not None else 0.0
         on_level(level_from_rms(peak / 2.0 if peak else 0.0))
-    flat = np.clip(audio.flatten(), -1.0, 1.0)
-    if float(np.max(np.abs(flat))) < 1e-5:
-        return flat, True  # flat mic
-    pcm = (flat * 32767.0).astype(np.int16)
-    return pcm, False
+    return flat, peak, rate
 
 
 def _record_vad_ptt(
@@ -621,27 +692,35 @@ def _record_vad_ptt(
     sample_rate: int,
     on_level: Callable[[float], None] | None,
     energy_threshold: float = _VAD_ENERGY_THRESHOLD,
+    wait_speech_s: float = _VAD_WAIT_SPEECH_S,
+    silence_end_s: float = _VAD_SILENCE_END_S,
+    max_s: float = _VAD_MAX_S,
 ):
-    """Energy VAD: wait for speech, then until silence or max duration.
-
-    Returns (pcm_int16_or_float_empty, flat_mic: bool, heard_speech: bool).
-    """
+    """Energy VAD (optional). Returns (float32 mono, peak, heard_speech, used_rate)."""
     import numpy as np  # type: ignore
     import sounddevice as sd  # type: ignore
 
-    frame = int(_VAD_FRAME_S * sample_rate)
+    rate = int(sample_rate)
+    try:
+        _ = sd.check_input_settings(samplerate=rate, channels=1, dtype="float32")
+    except Exception:
+        rate = _device_default_samplerate(rate)
+
+    frame = max(1, int(_VAD_FRAME_S * rate))
     chunks: list = []
     speech_started = False
     silence_s = 0.0
     waited_s = 0.0
     spoken_s = 0.0
     flat_streak = 0
+    peak = 0.0
 
-    with sd.InputStream(samplerate=sample_rate, channels=1, dtype="float32", blocksize=frame) as stream:
+    with sd.InputStream(samplerate=rate, channels=1, dtype="float32", blocksize=frame) as stream:
         while True:
             data, overflowed = stream.read(frame)  # noqa: F841
             mono = data.reshape(-1)
             rms = pcm_rms(mono)
+            peak = max(peak, float(np.max(np.abs(mono))) if mono.size else 0.0)
             if on_level:
                 on_level(level_from_rms(rms))
 
@@ -657,11 +736,9 @@ def _record_vad_ptt(
                     silence_s = 0.0
                     chunks.append(mono.copy())
                     spoken_s += _VAD_FRAME_S
-                elif waited_s >= _VAD_WAIT_SPEECH_S:
-                    # Never crossed energy — didn't hear you
+                elif waited_s >= wait_speech_s:
                     empty = np.zeros(0, dtype=np.float32)
-                    is_flat = flat_streak * _VAD_FRAME_S >= min(1.0, _VAD_WAIT_SPEECH_S * 0.8)
-                    return empty, is_flat, False
+                    return empty, peak, False, rate
             else:
                 chunks.append(mono.copy())
                 spoken_s += _VAD_FRAME_S
@@ -669,33 +746,37 @@ def _record_vad_ptt(
                     silence_s = 0.0
                 else:
                     silence_s += _VAD_FRAME_S
-                if should_end_on_silence(silence_s, _VAD_SILENCE_END_S):
+                if should_end_on_silence(silence_s, silence_end_s):
                     break
-                if spoken_s >= _VAD_MAX_S:
+                if spoken_s >= max_s:
                     break
 
     if not chunks:
-        return np.zeros(0, dtype=np.float32), True, False
+        return np.zeros(0, dtype=np.float32), peak, False, rate
     audio = np.concatenate(chunks)
     flat = np.clip(audio.astype(np.float32), -1.0, 1.0)
-    if float(np.max(np.abs(flat))) < 1e-5:
-        return flat, True, speech_started
-    pcm = (flat * 32767.0).astype(np.int16)
-    return pcm, False, speech_started
+    if flat.size:
+        peak = max(peak, float(np.max(np.abs(flat))))
+    return flat, peak, speech_started, rate
 
 
 def make_mic_hear(
     *,
     on_level: Callable[[float], None] | None = None,
     mode: HearMode = "ptt",
+    duration_s: float | None = None,
+    wait_speech_s: float | None = None,
 ) -> Callable[[], str | None] | None:
     """Record via sounddevice; recognize with SpeechRecognition (Google STT).
 
-    mode=\"ptt\": energy VAD for Listen button (Speak now…).
-    mode=\"wake\": shorter fixed ~2.5s chunk for wake loop.
+    mode=\"ptt\": Listen button — fixed ~5s window by default (Speak now…).
+    mode=\"wake\": shorter fixed chunk for always-listen; skip Google on flat silence.
+
+    Set JARVIS_VAD=1 to use energy-gated capture instead of fixed windows.
 
     The returned callable has attributes:
       last_error: None | \"network\" | \"unknown\" | \"stt\" | \"mic\"
+      last_peak: float peak |sample| from last capture
       on_level: optional VU callback (mutable)
       mode: wake|ptt
     """
@@ -707,34 +788,60 @@ def make_mic_hear(
         return None
 
     recognizer = sr.Recognizer()
-    sample_rate = 16000
+    sample_rate = _TARGET_STT_RATE
 
     def hear() -> str | None:
         hear.last_error = None  # type: ignore[attr-defined]
+        hear.last_peak = 0.0  # type: ignore[attr-defined]
         level_cb = hear.on_level  # type: ignore[attr-defined]
         use_mode: HearMode = hear.mode  # type: ignore[attr-defined]
+        use_vad = _vad_enabled()
         try:
-            if use_mode == "wake":
-                pcm, is_flat = _record_fixed(
-                    duration=_WAKE_DURATION_S,
+            if use_vad:
+                wait = (
+                    float(wait_speech_s)
+                    if wait_speech_s is not None
+                    else (_VAD_WAIT_SPEECH_S if use_mode == "ptt" else 1.5)
+                )
+                max_s = _VAD_MAX_S if use_mode == "ptt" else 5.5
+                sil = _VAD_SILENCE_END_S if use_mode == "ptt" else 0.65
+                flat_f32, peak, heard_speech, rate = _record_vad_ptt(
                     sample_rate=sample_rate,
                     on_level=level_cb,
+                    wait_speech_s=wait,
+                    silence_end_s=sil,
+                    max_s=max_s,
                 )
-                heard_speech = not is_flat
+                hear.last_peak = float(peak)  # type: ignore[attr-defined]
+                if not heard_speech or getattr(flat_f32, "size", 0) == 0:
+                    hear.last_error = (  # type: ignore[attr-defined]
+                        "mic" if peak < _FLAT_PEAK_EPS else "unknown"
+                    )
+                    return None
             else:
-                pcm, is_flat, heard_speech = _record_vad_ptt(
+                dur = float(
+                    duration_s
+                    if duration_s is not None
+                    else (_PTT_DURATION_S if use_mode == "ptt" else _WAKE_DURATION_S)
+                )
+                flat_f32, peak, rate = _record_fixed(
+                    duration=dur,
                     sample_rate=sample_rate,
                     on_level=level_cb,
                 )
+                hear.last_peak = float(peak)  # type: ignore[attr-defined]
+                if getattr(flat_f32, "size", 0) == 0 or peak < _FLAT_PEAK_EPS:
+                    # Flat mic / silence — skip Google (quota + latency)
+                    hear.last_error = "mic"  # type: ignore[attr-defined]
+                    return None
 
-            if not heard_speech or getattr(pcm, "size", 0) == 0:
-                # Never crossed energy / empty — not network. Flat device → mic; else unknown.
-                hear.last_error = "mic" if is_flat else "unknown"  # type: ignore[attr-defined]
+            # Resample to 16 kHz when device forced a native rate
+            mono, stt_rate = _resample_to_16k(flat_f32, rate)
+            if getattr(mono, "size", 0) == 0:
+                hear.last_error = "mic"  # type: ignore[attr-defined]
                 return None
-
-
-            pcm_bytes = pcm.tobytes() if hasattr(pcm, "tobytes") else bytes(pcm)
-            return _recognize_google(recognizer, pcm_bytes, sample_rate, hear)
+            pcm_bytes = _float_to_pcm16(mono)
+            return _recognize_google(recognizer, pcm_bytes, stt_rate, hear)
         except PermissionError:
             raise
         except Exception:
@@ -742,6 +849,7 @@ def make_mic_hear(
             return None
 
     hear.last_error = None  # type: ignore[attr-defined]
+    hear.last_peak = 0.0  # type: ignore[attr-defined]
     hear.on_level = on_level  # type: ignore[attr-defined]
     hear.mode = mode  # type: ignore[attr-defined]
     return hear
@@ -751,7 +859,7 @@ def make_mic_hear_ptt(
     *,
     on_level: Callable[[float], None] | None = None,
 ) -> Callable[[], str | None] | None:
-    """Listen-button path: energy VAD + Google STT."""
+    """Listen-button path: fixed ~5s record + Google STT (VAD if JARVIS_VAD=1)."""
     return make_mic_hear(on_level=on_level, mode="ptt")
 
 

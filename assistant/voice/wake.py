@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import threading
 import time
@@ -12,6 +13,22 @@ from pathlib import Path
 from typing import Callable
 
 from assistant.config import user_data_dir
+
+_log = logging.getLogger("jarvis.wake")
+
+# Phonetic / STT variants Google often returns instead of "Jarvis"
+_DEFAULT_WAKE_VARIANTS = (
+    "jarvis",
+    "jervis",
+    "jarves",
+    "jarvies",
+    "jarvis's",
+    "jarvis'",
+    "jarvice",
+    "jarvis,",
+)
+
+_WAKE_PREFIXES = ("hey", "ok", "okay")
 
 
 class WakePhase(str, Enum):
@@ -54,33 +71,102 @@ class WakePipeline:
     false_wakes: int = 0
     _speech_accum_s: float = 0.0
 
+    def _variants(self) -> tuple[str, ...]:
+        primary = (self.config.wake_name or "Jarvis").strip().lower()
+        primary = re.sub(r"[,.:;!'\"]+$", "", primary)
+        base = list(_DEFAULT_WAKE_VARIANTS)
+        if primary and primary not in base:
+            base.insert(0, primary)
+            if not primary.endswith("s"):
+                base.append(primary + "'s")
+        seen: set[str] = set()
+        out: list[str] = []
+        for v in base:
+            key = v.lower().rstrip(",.:;!")
+            if key and key not in seen:
+                seen.add(key)
+                out.append(key)
+        return tuple(out)
+
+    def _norm_token(self, word: str) -> str:
+        w = (word or "").lower().strip()
+        w = w.strip(",.:;!")
+        if w.endswith("'s"):
+            w = w[:-2]
+        return w
+
+    def _is_wake_token(self, word: str) -> bool:
+        core = self._norm_token(word)
+        if not core:
+            return False
+        variants = self._variants()
+        if core in variants:
+            return True
+        # Near-miss STT (jarves/jervis already listed; allow tiny edit distance)
+        for v in variants:
+            if abs(len(core) - len(v)) <= 2 and len(core) >= 4:
+                # share prefix of 3+ chars
+                if core[:3] == v[:3]:
+                    # Hamming-ish: count differing chars on aligned prefix
+                    n = min(len(core), len(v))
+                    diff = sum(1 for i in range(n) if core[i] != v[i]) + abs(len(core) - len(v))
+                    if diff <= 2:
+                        return True
+        return False
+
+    def _wake_token_re(self) -> re.Pattern[str]:
+        parts = sorted({re.escape(v) for v in self._variants()}, key=len, reverse=True)
+        alt = "|".join(parts)
+        return re.compile(rf"\b(?:{alt})\b", re.I)
+
     def _wake_re(self) -> re.Pattern[str]:
-        name = re.escape(self.config.wake_name.strip())
-        return re.compile(rf"(?:(?:hey|ok|okay)\s+)?\b{name}\b", re.I)
+        token = self._wake_token_re().pattern
+        return re.compile(rf"(?:(?:hey|ok|okay)\s+)?(?:{token})", re.I)
+
+    def _tokenize(self, text: str) -> list[str]:
+        t = re.sub(r"^[\s,.:;!\-]+", "", (text or "").strip())
+        if not t:
+            return []
+        return re.findall(r"[A-Za-z0-9]+(?:'[A-Za-z0-9]+)?", t)
 
     def strip_wake(self, text: str) -> str:
         t = (text or "").strip()
+        # Prefer structured strip using token positions so variants always drop
+        words = self._tokenize(t)
+        if words:
+            window = words[:4]
+            wake_idx = None
+            for i, w in enumerate(window):
+                if self._is_wake_token(w):
+                    # preceding must be prefixes
+                    if all(self._norm_token(x) in _WAKE_PREFIXES for x in window[:i]):
+                        wake_idx = i
+                        break
+            if wake_idx is not None:
+                # Rebuild leftover from original by removing prefix+wake via regex once
+                t = self._wake_re().sub("", t, count=1)
+                return re.sub(r"^[\s,.:;!\-]+", "", t).strip()
         t = self._wake_re().sub("", t, count=1)
         return re.sub(r"^[\s,.:;!\-]+", "", t).strip()
 
     def wake_at_start(self, text: str) -> bool:
-        """True only if transcript is essentially Jarvis / Hey Jarvis near the start.
+        """True if a Jarvis variant leads (optional hey/ok), within the first ~4 words.
 
         Voice UI: do not open Listening on VAD alone or mid-sentence name drops.
+        Preceding words before the wake token may only be hey/ok/okay.
         """
-        t = (text or "").strip()
-        if not t:
+        words = self._tokenize(text)
+        if not words:
             return False
-        # Must begin with optional hey/ok + wake name (ignore leading punctuation)
-        t = re.sub(r"^[\s,.:;!\-]+", "", t)
-        name = re.escape(self.config.wake_name.strip())
-        return bool(
-            re.match(
-                rf"^(?:(?:hey|ok|okay)\s+)?{name}\b",
-                t,
-                re.I,
-            )
-        )
+        window = words[:4]
+        for i, w in enumerate(window):
+            if not self._is_wake_token(w):
+                continue
+            # Words before wake must be prefixes only (reject "please Jarvis …")
+            if all(self._norm_token(x) in _WAKE_PREFIXES for x in window[:i]):
+                return True
+            return False
+        return False
 
     def is_wake_only_or_wake_plus_command(self, text: str) -> bool:
         """Accept wake-gated STT if name leads; leftover may be the command."""
@@ -120,16 +206,21 @@ class WakePipeline:
         """Accept a wake hypothesis. Returns True if Listening opens."""
         now = time.monotonic() if now is None else now
         if self.muted:
+            _log.info("wake ignored: muted (unmute tip)")
             return False
         if confidence < self.config.wake_confidence_min:
             self.false_wakes += 1
+            _log.info("false-wake: low confidence=%.2f text=%r", confidence, text)
             return False
         if not text or not self.wake_at_start(text):
             self.false_wakes += 1
+            _log.info("false-wake: no start match text=%r", text)
             return False
         if self.phase == WakePhase.BUSY and not barge_in:
+            _log.info("wake ignored: busy (no barge-in) text=%r", text)
             return False
         if now - self.last_wake_at < self.config.wake_debounce_s:
+            _log.info("wake ignored: debounce text=%r", text)
             return False
         self.last_wake_at = now
         self.phase = WakePhase.LISTENING
@@ -137,6 +228,7 @@ class WakePipeline:
         self.speech_started_at = None
         self.last_voice_at = None
         self._speech_accum_s = 0.0
+        _log.info("wake accepted text=%r leftover=%r", text, self.strip_wake(text))
         return True
 
     def feed_energy(self, level: float, dt: float, *, now: float | None = None) -> str | None:
@@ -236,22 +328,40 @@ class WakeListener:
     def handle_transcript(self, text: str, *, confidence: float = 1.0) -> str | None:
         """Process a wake-candidate phrase (unit-test / simple backends)."""
         if self.muted or not self.capturing:
+            if self.muted:
+                self._emit("muted")
             return None
         if not self.pipeline.try_wake(text, confidence=confidence):
             return None
         self._emit("wake")
         cmd = self.pipeline.strip_wake(text)
+        # Tiny leftover (STT noise / trailing comma) → treat as bare wake
+        if cmd and len(cmd.split()) <= 1 and len(cmd) <= 2 and not cmd.isalnum():
+            cmd = ""
         if cmd:
             self.pipeline.set_busy(True)
             self._emit("busy")
             return cmd
-        # Bare wake — collect command with heavier STT if available
+        # Bare wake — open command window with clear HUD, then one follow-up capture
+        self._emit("listening")
         hear_cmd = self.hear_command or self.hear
         if hear_cmd:
-            # Simulate VAD completion via one follow-up phrase
-            follow = (hear_cmd() or "").strip()
+            # Prefer longer no-speech wait on post-wake hear when supported
+            prev_wait = getattr(hear_cmd, "wait_speech_s", None)
+            try:
+                if hasattr(hear_cmd, "wait_speech_s"):
+                    hear_cmd.wait_speech_s = max(  # type: ignore[attr-defined]
+                        float(getattr(hear_cmd, "wait_speech_s", 0) or 0),
+                        float(self.config.no_speech_timeout_s),
+                    )
+                # Brief grace so user can start speaking after hearing the wake chime/HUD
+                time.sleep(0.35)
+                follow = (hear_cmd() or "").strip()
+            finally:
+                if prev_wait is not None and hasattr(hear_cmd, "wait_speech_s"):
+                    hear_cmd.wait_speech_s = prev_wait  # type: ignore[attr-defined]
             if follow:
-                if self.pipeline._wake_re().search(follow):
+                if self.pipeline.wake_at_start(follow):
                     follow = self.pipeline.strip_wake(follow)
                 self.pipeline.set_busy(True)
                 self._emit("busy")

@@ -1,6 +1,11 @@
 """Pure VAD helpers — no mic hardware required."""
 
 from assistant.voice.platform_io import (
+    _FLAT_PEAK_EPS,
+    _PTT_DURATION_S,
+    _TARGET_STT_RATE,
+    _resample_to_16k,
+    _vad_enabled,
     level_from_rms,
     pcm_rms,
     should_end_on_silence,
@@ -35,3 +40,26 @@ def test_short_edge_voice_name():
     assert short_edge_voice_name("en-GB-RyanNeural") == "Ryan"
     assert short_edge_voice_name("en-GB-ThomasNeural") == "Thomas"
     assert short_edge_voice_name("") == "Edge"
+
+
+def test_resample_identity_at_16k():
+    samples = [0.0, 0.5, -0.5, 0.25]
+    out, rate = _resample_to_16k(samples, _TARGET_STT_RATE)
+    assert rate == _TARGET_STT_RATE
+    assert len(out) == len(samples)
+
+
+def test_resample_from_48k_length():
+    # 0.01s at 48k = 480 samples → 160 at 16k
+    n = 480
+    samples = [0.1] * n
+    out, rate = _resample_to_16k(samples, 48000)
+    assert rate == 16000
+    assert 150 <= len(out) <= 170
+
+
+def test_ptt_defaults_fixed_not_vad(monkeypatch):
+    monkeypatch.delenv("JARVIS_VAD", raising=False)
+    assert _vad_enabled() is False
+    assert _PTT_DURATION_S >= 4.5
+    assert _FLAT_PEAK_EPS > 0

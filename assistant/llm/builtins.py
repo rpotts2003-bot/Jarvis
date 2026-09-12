@@ -102,4 +102,11 @@ def chat_reply(text: str, *, history: list[tuple[str, str]] | None = None) -> st
             data = json.loads(resp.read().decode())
         return data["choices"][0]["message"]["content"].strip()
     except Exception as e:  # noqa: BLE001
+        err = str(e)
+        # Soften common rate-limit / billing failures (e.g. HTTP 429)
+        if "429" in err or "Too Many Requests" in err:
+            return (
+                "Chat hit a rate limit or billing cap (429). Check provider billing, "
+                "or try Grok via OPENAI_BASE_URL=https://api.x.ai/v1 — or ask for help / time / date."
+            )
         return f"I couldn’t reach the chat service ({e}). Try again, or ask for help / time / date."

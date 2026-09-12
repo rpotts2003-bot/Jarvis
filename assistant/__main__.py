@@ -86,7 +86,15 @@ def gui_loop() -> None:
         turn = orch.handle_utterance(text)
         return turn.reply or ""
 
-    status_bits = ["chat:OpenAI" if cloud_chat_enabled() else "chat:offline"]
+    if cloud_chat_enabled():
+        base = os.environ.get("OPENAI_BASE_URL", "").lower()
+        if "x.ai" in base:
+            chat_label = "chat:Grok"
+        else:
+            chat_label = "chat:OpenAI"
+    else:
+        chat_label = "chat:offline"
+    status_bits = [chat_label]
     # Listen button: fixed ~5s (ptt). Wake loop: shorter fixed chunk. JARVIS_VAD=1 for energy gate.
     hear_ptt = make_mic_hear(mode="ptt")
     hear_wake = make_mic_hear(mode="wake")

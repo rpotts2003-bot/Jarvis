@@ -87,8 +87,10 @@ def gui_loop() -> None:
         return turn.reply or ""
 
     status_bits = ["chat:OpenAI" if cloud_chat_enabled() else "chat:offline"]
-    # Always try mic for Listen button; wake optional via always_listen
-    hear = make_mic_hear()
+    # Listen button: energy VAD (ptt). Wake loop: shorter fixed chunk.
+    hear_ptt = make_mic_hear(mode="ptt")
+    hear_wake = make_mic_hear(mode="wake")
+    hear = hear_ptt
     status_bits.append("mic:on" if hear else "mic:type-only (install voice deps)")
     tts_label = getattr(tts, "status_label", None)
     if tts_label:
@@ -96,7 +98,11 @@ def gui_loop() -> None:
 
     wake = None
     if always:
-        wake = WakeListener(config=WakeConfig(wake_name=str(wake_name)), hear=hear)
+        wake = WakeListener(
+            config=WakeConfig(wake_name=str(wake_name)),
+            hear=hear_wake or hear_ptt,
+            hear_command=hear_ptt,
+        )
 
         def _mic_err(msg: str) -> None:
             # Surfaced via wake on_state mic_denied + GUI caption path

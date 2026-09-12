@@ -37,7 +37,7 @@ if errorlevel 1 (
 set "NEED_INSTALL=0"
 if not exist .venv\.jarvis_deps_ok set "NEED_INSTALL=1"
 if "%NEED_INSTALL%"=="0" (
-  python -c "import assistant, yaml, sounddevice, speech_recognition, pyttsx3" >nul 2>&1
+  python -c "import assistant, yaml, sounddevice, speech_recognition, pyttsx3, edge_tts" >nul 2>&1
   if errorlevel 1 set "NEED_INSTALL=1"
 )
 
@@ -55,7 +55,7 @@ if "%NEED_INSTALL%"=="1" (
     pause
     exit /b 1
   )
-  python -c "import assistant, yaml, sounddevice, speech_recognition, pyttsx3; print('deps ok')"
+  python -c "import assistant, yaml, sounddevice, speech_recognition, pyttsx3, edge_tts; print('deps ok')"
   if errorlevel 1 (
     echo Import check failed after install.
     pause
@@ -76,7 +76,7 @@ if errorlevel 1 (
   echo Mic probe skipped or unavailable — you can still type in the window.
 )
 
-echo Tip: for a UK male voice, install English ^(United Kingdom^) speech in Windows Settings.
+echo Tip: neural UK male voice ^(Ryan^) needs internet; offline falls back to Windows SAPI.
 echo Starting Jarvis window...
 python -m assistant gui
 if errorlevel 1 (

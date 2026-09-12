@@ -76,3 +76,28 @@ def test_gender_helpers():
 def test_gui_uses_noop_orch_tts_helper():
     assert gui_uses_noop_orch_tts(MockTTS(), lambda _t: None) is True
     assert gui_uses_noop_orch_tts(MockTTS(), None) is False
+
+
+def test_short_edge_name_helper_import():
+    from assistant.voice.tts_style import short_edge_voice_name
+
+    assert short_edge_voice_name("en-GB-RyanNeural") == "Ryan"
+
+
+def test_edge_tts_status_label_when_forced(monkeypatch):
+    import os
+    import assistant.voice.platform_io as pio
+
+    if not pio._edge_tts_importable():
+        return
+    monkeypatch.setenv("JARVIS_FORCE_EDGE", "1")
+    monkeypatch.setenv("JARVIS_ALLOW_EDGE", "1")
+    monkeypatch.delenv("JARVIS_FORCE_SAPI", raising=False)
+    monkeypatch.setenv("JARVIS_TTS_BACKEND", "edge")
+    tts = pio.make_tts()
+    assert getattr(tts, "status_label", "").startswith("tts:")
+    # Prefer Ryan in label when EdgeTTS constructed
+    from assistant.voice.platform_io import EdgeTTS
+
+    if isinstance(tts, EdgeTTS):
+        assert "Ryan" in tts.status_label or "Thomas" in tts.status_label

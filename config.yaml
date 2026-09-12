@@ -31,8 +31,10 @@ plex:
   # token: ""
   # base_url: http://127.0.0.1:32400
 
-# Free Windows TTS — British male, measured pace (Jarvis manner, not a clone)
+# Free TTS — neural UK male online (Edge); SAPI George offline fallback
 voice:
-  rate: 145          # pyttsx3; ~200 default, lower = calmer
+  rate: 175              # SAPI/pyttsx3 fallback (~200 default; was 145)
   volume: 0.92
-  voice_hint: George  # prefer Microsoft George / en-GB male
+  voice_hint: George     # prefer Microsoft George / en-GB male when offline
+  edge_voice: en-GB-RyanNeural
+  edge_rate: "+8%"       # slightly brisk Jarvis manner (not draggy)

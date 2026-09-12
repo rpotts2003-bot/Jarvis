@@ -235,7 +235,9 @@ class JarvisWindow:
         if level is not None:
             self.rings.set_level(level)
         if detail:
-            self.caption.configure(text=detail)
+            # Red caption for hard mic / permission / missing-deps failures
+            fg = "#ff8a80" if state == VoiceState.ERROR else "#b0bec5"
+            self.caption.configure(text=detail, fg=fg)
         self.state_label.configure(text=state.value)
         self._draw()
 
@@ -325,7 +327,7 @@ class JarvisWindow:
         threading.Thread(target=worker, name="jarvis-tts", daemon=True).start()
 
     def _listen_once(self) -> None:
-        """Push-to-talk: one-shot record without requiring the wake word."""
+        """Push-to-talk: VAD record without requiring the wake word."""
         if self._mic_muted:
             self.set_state(
                 VoiceState.IDLE,
@@ -341,8 +343,25 @@ class JarvisWindow:
 
         if self.wake is not None:
             self.wake.set_busy(True)
-        self.set_state(VoiceState.LISTENING, "Listening… (tap Listen — no wake word)", level=0.35)
+        self.set_state(VoiceState.LISTENING, "Speak now…", level=0.35)
         self.state_label.configure(text="listen")
+
+        # Live VU while recording (orb level)
+        def _vu(level: float) -> None:
+            def apply(lv: float = level) -> None:
+                self.rings.set_level(lv)
+                self._draw()
+
+            try:
+                self.root.after(0, apply)
+            except Exception:
+                pass
+
+        prev_level = getattr(self.hear, "on_level", None)
+        try:
+            self.hear.on_level = _vu  # type: ignore[attr-defined]
+        except Exception:
+            pass
 
         def worker() -> None:
             text = None
@@ -352,26 +371,40 @@ class JarvisWindow:
                 err_kind = getattr(self.hear, "last_error", None)
             except PermissionError:
                 err_kind = "denied"
-            except Exception as e:  # noqa: BLE001
+            except Exception:  # noqa: BLE001
                 err_kind = "mic"
                 text = None
+            finally:
+                try:
+                    self.hear.on_level = prev_level  # type: ignore[attr-defined]
+                except Exception:
+                    pass
 
             def finish() -> None:
                 if self.wake is not None and not text:
                     self.wake.set_busy(False)
                 if text and text.strip():
+                    # Same speak path as typing after transcript
                     self._handle_voice_command(text.strip())
                     return
-                if err_kind in {"network", "stt"}:
-                    msg = "Couldn't hear that (need internet for speech recognition)"
+                if err_kind == "network":
+                    msg = "Need internet for speech recognition — check connection, then tap Listen."
+                    st = VoiceState.ERROR
+                elif err_kind == "stt":
+                    msg = "Speech recognition failed — try again, or type below."
+                    st = VoiceState.ERROR
                 elif err_kind == "denied":
                     msg = "Microphone denied — enable mic privacy, then try Listen again."
+                    st = VoiceState.ERROR
                 elif err_kind == "mic":
-                    msg = "Microphone unavailable — check Windows mic settings."
+                    msg = "No mic signal — check Windows mic / unmute, then Test mic."
+                    st = VoiceState.ERROR
                 else:
-                    msg = "Couldn't hear that (need internet for speech recognition)"
-                self.set_state(VoiceState.IDLE, msg)
-                self.state_label.configure(text="idle")
+                    # unknown / didn't catch speech energy
+                    msg = "Didn't catch that — tap Listen and speak clearly"
+                    st = VoiceState.IDLE
+                self.set_state(st, msg)
+                self.state_label.configure(text="idle" if st == VoiceState.IDLE else "error")
                 self.root.after(
                     2800,
                     lambda: self.set_state(VoiceState.IDLE, self._armed_idle_caption()),

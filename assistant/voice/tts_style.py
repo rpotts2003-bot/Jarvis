@@ -1,4 +1,4 @@
-"""Free Windows British-male TTS style (Jarvis manner — not a celebrity clone)."""
+"""Free British-male TTS style (Jarvis manner — not a celebrity clone)."""
 
 from __future__ import annotations
 
@@ -7,12 +7,15 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class TtsStyle:
-    # pyttsx3 rate ~200 default; lower = more measured (Jarvis never rushes)
-    rate: int = 145
+    # SAPI/pyttsx3 rate ~200 default; 175 ≈ slightly measured, not draggy
+    rate: int = 175
     # pyttsx3 volume 0.0–1.0
     volume: float = 0.92
-    # Soft preference string matched against voice name/id (optional override)
+    # Soft preference for SAPI fallback (optional override)
     voice_hint: str = "George"
+    # edge-tts neural (online); short status uses Ryan / Thomas
+    edge_voice: str = "en-GB-RyanNeural"
+    edge_rate: str = "+8%"
 
 
 # Scoring keywords for SAPI / OneCore voice ids on Windows
@@ -138,3 +141,17 @@ def pick_best_voice_name(voices: list, *, prefer_hint: str = "") -> str | None:
         if str(vid) == str(best_id):
             return name or str(vid)
     return str(best_id)
+
+
+def short_edge_voice_name(voice_id: str) -> str:
+    """en-GB-RyanNeural -> Ryan."""
+    s = (voice_id or "").strip()
+    if not s:
+        return "Edge"
+    # Take last hyphen segment and strip Neural / MultilingualNoise
+    part = s.split("-")[-1]
+    for suffix in ("Neural", "MultilingualNeural", "Multilingual"):
+        if part.endswith(suffix):
+            part = part[: -len(suffix)]
+            break
+    return part or "Edge"

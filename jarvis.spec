@@ -27,6 +27,7 @@ hidden = [
     "assistant.voice.platform_io",
     "assistant.voice.tts_style",
     "assistant.voice.adapters",
+    "edge_tts",
     "assistant.voice.state_machine",
     "assistant.envload",
     "assistant.llm.builtins",
@@ -43,7 +44,7 @@ hidden = [
 
 binaries = []
 _missing_critical = []
-for pkg in ("speech_recognition", "pyttsx3", "sounddevice", "numpy"):
+for pkg in ("speech_recognition", "pyttsx3", "sounddevice", "numpy", "edge_tts"):
     try:
         __import__(pkg)
         hidden += collect_submodules(pkg)

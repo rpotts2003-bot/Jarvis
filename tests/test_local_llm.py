@@ -161,3 +161,55 @@ def test_wake_extra_variants():
     p = WakePipeline(config=WakeConfig(wake_name="Jarvis"))
     assert p.wake_at_start("jarvus what time")
     assert p.wake_at_start("gervis help")
+
+
+
+def test_cpu_latency_defaults(monkeypatch):
+    monkeypatch.delenv("JARVIS_N_THREADS", raising=False)
+    monkeypatch.delenv("JARVIS_MODEL_MAX_TOKENS", raising=False)
+    assert lm.N_CTX == 1024
+    assert lm.N_BATCH == 256
+    assert lm.DEFAULT_MAX_TOKENS == 96
+    assert lm.DEFAULT_TEMPERATURE == 0.5
+    assert lm.default_max_tokens() == 96
+    n = lm.n_threads()
+    assert n >= 4
+    kw = lm._llama_kwargs("/tmp/model.gguf")
+    assert kw["n_ctx"] == 1024
+    assert kw["n_threads"] == n
+    assert kw["n_gpu_layers"] == 0
+
+
+def test_env_overrides_threads_and_tokens(monkeypatch):
+    monkeypatch.setenv("JARVIS_N_THREADS", "7")
+    monkeypatch.setenv("JARVIS_MODEL_MAX_TOKENS", "48")
+    assert lm.n_threads() == 7
+    assert lm.default_max_tokens() == 48
+    assert lm._llama_kwargs("x")["n_threads"] == 7
+
+
+def test_warm_load_async_skips_when_not_ready(monkeypatch):
+    monkeypatch.setattr(lm, "local_llm_disabled", lambda: False)
+    monkeypatch.setattr(lm, "model_ready", lambda: False)
+    monkeypatch.setattr(lm, "llama_cpp_available", lambda: True)
+    lm.reset_for_tests()
+    assert lm.warm_load_async() is False
+
+
+def test_warm_load_async_starts_thread(monkeypatch):
+    called = {}
+
+    def fake_get():
+        called["ok"] = True
+        return object()
+
+    monkeypatch.setattr(lm, "local_llm_disabled", lambda: False)
+    monkeypatch.setattr(lm, "model_ready", lambda: True)
+    monkeypatch.setattr(lm, "llama_cpp_available", lambda: True)
+    monkeypatch.setattr(lm, "_get_llm", fake_get)
+    lm.reset_for_tests()
+    assert lm.warm_load_async() is True
+    t = lm._warm_thread
+    assert t is not None
+    t.join(timeout=2)
+    assert called.get("ok") is True

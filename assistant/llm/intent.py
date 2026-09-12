@@ -39,8 +39,19 @@ _TEACH = re.compile(
     r"^\s*(?:remember(?:\s+that)?|teach(?:\s+me)?|learn(?:\s+that)?|next time(?:\s+that)?|if I say)\s+(.+)$",
     re.I | re.S,
 )
+# Only explicit memory lookups — NOT every "what is …" question.
+# "what is the capital of France?" must go to chat, not recall.
 _RECALL = re.compile(
-    r"^\s*(?:what(?:'s| is)|recall|do you remember)\s+(.+?)\??\s*$", re.I
+    r"^\s*(?:"
+    r"(?:recall(?:\s+that)?|do you remember)\s+(.+?)"
+    r"|"
+    r"what do you remember(?:\s+about)?\s+(.+?)"
+    r"|"
+    r"what did I (?:tell|teach|say) you(?:\s+about)?\s+(.+?)"
+    r"|"
+    r"what(?:'s| is)\s+my\s+(.+?)"
+    r")\??\s*$",
+    re.I,
 )
 _FORGET = re.compile(r"^\s*forget\s+(.+)$", re.I)
 _LIST_SKILLS = re.compile(
@@ -140,7 +151,8 @@ def parse_intent(text: str) -> Intent:
 
     m = _RECALL.match(t)
     if m:
-        return Intent("recall", {"query": m.group(1).strip()})
+        query = next((g.strip() for g in m.groups() if g), "")
+        return Intent("recall", {"query": query, "text": t})
 
     m = _OPEN_URL.match(t)
     if m:

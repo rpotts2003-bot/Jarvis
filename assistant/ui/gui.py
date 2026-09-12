@@ -286,6 +286,20 @@ class JarvisWindow:
             return "Mic muted — tap Mute to arm wake, or type below."
         return self._armed_caption
 
+    def _thinking_caption(self) -> str:
+        """HUD caption while chat runs. Local GGUF is CPU-bound — say so."""
+        hint = getattr(self, "_status_hint", "") or ""
+        if "chat:local" in hint:
+            return "Thinking (local CPU)…"
+        try:
+            from assistant.envload import chat_backend_label
+
+            if chat_backend_label(probe=False) == "chat:local":
+                return "Thinking (local CPU)…"
+        except Exception:
+            pass
+        return "Thinking…"
+
     def _speak_async(self, text: str, *, idle_detail: str | None = None) -> None:
         """Speak on a background thread; never block the Tk main loop with runAndWait."""
         reply = (text or "").strip()
@@ -552,7 +566,7 @@ class JarvisWindow:
         self,
         text: str,
         *,
-        caption: str = "Thinking…",
+        caption: str | None = None,
         from_voice: bool = False,
     ) -> None:
         """Call on_submit on a background thread so Ollama never freezes the HUD."""
@@ -565,6 +579,8 @@ class JarvisWindow:
         if from_voice and self.wake is not None:
             self.wake.set_busy(True)
         self._cancel_demo()
+        if not caption:
+            caption = self._thinking_caption()
         self.set_state(VoiceState.THINKING, caption)
         self.state_label.configure(text="thinking")
 
@@ -736,7 +752,7 @@ class JarvisWindow:
             return
         self.entry.delete(0, tk.END)
         # Typed submit on background thread — never block Tk with Ollama
-        self._submit_async(text, caption="Thinking…", from_voice=False)
+        self._submit_async(text, caption=self._thinking_caption(), from_voice=False)
 
     def _tick(self) -> None:
         drive = self.rings.tick()
@@ -946,7 +962,7 @@ def run_gui(
     hear: Callable[[], str | None] | None = None,
     speak_muted: bool = False,
 ) -> None:
-    JarvisWindow(
+    win = JarvisWindow(
         title=title,
         on_submit=on_submit,
         wake=wake,
@@ -954,4 +970,16 @@ def run_gui(
         speak=speak,
         hear=hear,
         speak_muted=speak_muted,
-    ).run()
+    )
+
+    def _warm_brain() -> None:
+        try:
+            from assistant.llm.local_model import warm_load_async
+
+            warm_load_async()
+        except Exception:
+            pass
+
+    # After the HUD is up, preload GGUF so the first typed chat is not cold.
+    win.root.after(500, _warm_brain)
+    win.run()

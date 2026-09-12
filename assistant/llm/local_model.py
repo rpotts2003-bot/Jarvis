@@ -26,11 +26,52 @@ DEFAULT_MODEL_URL = (
 DEFAULT_MODEL_SIZE_GB = 1.04
 _INFERENCE_TIMEOUT_S = 45.0
 _MIN_BYTES = 1_000_000  # reject tiny / HTML error pages as "ready"
+N_CTX = 1024
+N_BATCH = 256
+DEFAULT_MAX_TOKENS = 96
+DEFAULT_TEMPERATURE = 0.5
 
 _lock = threading.Lock()
 _download_thread: threading.Thread | None = None
+_warm_thread: threading.Thread | None = None
 _llm: Any = None
 _llm_path: str | None = None
+
+
+def n_threads() -> int:
+    """CPU threads for llama.cpp. JARVIS_N_THREADS overrides."""
+    raw = os.environ.get("JARVIS_N_THREADS", "").strip()
+    if raw:
+        try:
+            n = int(raw)
+            if n > 0:
+                return n
+        except ValueError:
+            pass
+    return max(4, (os.cpu_count() or 4) - 1)
+
+
+def default_max_tokens() -> int:
+    """Cap generated tokens. JARVIS_MODEL_MAX_TOKENS overrides (default 96)."""
+    raw = os.environ.get("JARVIS_MODEL_MAX_TOKENS", "").strip()
+    if raw:
+        try:
+            n = int(raw)
+            if n > 0:
+                return n
+        except ValueError:
+            pass
+    return DEFAULT_MAX_TOKENS
+
+
+def _llama_kwargs(path: str) -> dict[str, Any]:
+    return {
+        "model_path": path,
+        "n_ctx": N_CTX,
+        "n_threads": n_threads(),
+        "n_gpu_layers": 0,
+        "verbose": False,
+    }
 
 
 def models_dir() -> Path:
@@ -252,31 +293,64 @@ def ensure_model_async() -> str:
     return "downloading"
 
 
+def _make_llama(path: str) -> Any:
+    from llama_cpp import Llama
+
+    kw = _llama_kwargs(path)
+    # n_batch speeds CPU decode when the binding supports it
+    try:
+        return Llama(**kw, n_batch=N_BATCH)
+    except TypeError:
+        return Llama(**kw)
+
+
 def _get_llm() -> Any:
     global _llm, _llm_path
     path = str(model_path())
     with _lock:
         if _llm is not None and _llm_path == path:
             return _llm
-        from llama_cpp import Llama
-
         # CPU-friendly defaults; n_gpu_layers=0 avoids CUDA surprises on Windows
-        _llm = Llama(
-            model_path=path,
-            n_ctx=2048,
-            n_threads=max(2, (os.cpu_count() or 4) // 2),
-            n_gpu_layers=0,
-            verbose=False,
-        )
+        _llm = _make_llama(path)
         _llm_path = path
         return _llm
+
+
+def warm_load_async() -> bool:
+    """Load GGUF into RAM on a background thread so first chat is not cold.
+
+    Returns True if a warm-load is running or was started. Safe to call often.
+    """
+    if local_llm_disabled() or not model_ready() or not llama_cpp_available():
+        return False
+    global _warm_thread
+    with _lock:
+        if _llm is not None:
+            return False
+        if _warm_thread is not None and _warm_thread.is_alive():
+            return True
+
+        def worker() -> None:
+            try:
+                _get_llm()
+                print("[jarvis] Brain loaded (warm).", flush=True)
+            except Exception as e:  # noqa: BLE001
+                err = str(e)[:160]
+                print(f"[jarvis] Brain warm-load skipped: {err}", flush=True)
+
+        t = threading.Thread(
+            target=worker, name="jarvis-model-warm", daemon=True
+        )
+        _warm_thread = t
+        t.start()
+        return True
 
 
 def generate(
     messages: list[dict[str, str]],
     *,
-    max_tokens: int = 256,
-    temperature: float = 0.6,
+    max_tokens: int | None = None,
+    temperature: float | None = None,
 ) -> str:
     """Run chat completion on the bundled GGUF. Raises if model/llama missing."""
     if local_llm_disabled():
@@ -289,6 +363,10 @@ def generate(
             "Re-run Start Jarvis.bat (it tries to install it), "
             "or: pip install llama-cpp-python"
         )
+    if max_tokens is None:
+        max_tokens = default_max_tokens()
+    if temperature is None:
+        temperature = DEFAULT_TEMPERATURE
     llm = _get_llm()
     # Prefer chat API when available
     try:
@@ -319,8 +397,9 @@ def generate(
 
 def reset_for_tests() -> None:
     """Clear in-memory LLM + download thread bookkeeping (unit tests only)."""
-    global _llm, _llm_path, _download_thread
+    global _llm, _llm_path, _download_thread, _warm_thread
     with _lock:
         _llm = None
         _llm_path = None
         _download_thread = None
+        _warm_thread = None

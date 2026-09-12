@@ -122,12 +122,19 @@ class Orchestrator:
                 TurnResult(reply="Forgotten." if ok else "Nothing to forget.", intent=intent)
             )
         if intent.kind == "recall":
-            val = self.memory.recall_text(intent.params.get("query", ""))
+            query = intent.params.get("query", "")
+            val = self.memory.recall_text(query)
             # also try exact profile key
             if val is None:
-                item = self.memory.get("profile", intent.params.get("query", "").lower())
+                item = self.memory.get("profile", str(query).lower())
                 val = item.value if item else None
-            reply = val if val else "I don’t have that saved yet."
+            if val:
+                return self._speak_result(TurnResult(reply=val, intent=intent))
+            # Miss: free-form chat (bundled GGUF), not a dead-end "not saved" string
+            text = (intent.params.get("text") or query or "").strip()
+            reply = chat_reply(text, history=getattr(self, "_history", None))
+            self._remember_turn("user", text)
+            self._remember_turn("assistant", reply)
             return self._speak_result(TurnResult(reply=reply, intent=intent))
 
         # skills: if user utterance matches skill key, run value as nested command

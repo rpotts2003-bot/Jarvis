@@ -112,3 +112,25 @@ def test_submit_async_in_gui_source():
     text = src.read_text(encoding="utf-8")
     assert "self._submit_async" in text
     assert "threading.Thread(target=worker, name=\"jarvis-submit\"" in text
+
+
+
+def test_system_prompt_is_short_and_sir(tmp_path, monkeypatch):
+    prefs = tmp_path / "ui_prefs.json"
+    monkeypatch.setattr("assistant.voice.mic_health.prefs_path", lambda: prefs)
+    monkeypatch.delenv("JARVIS_ADDRESS_AS", raising=False)
+    msgs = builtins._chat_messages("hello", None)
+    sys_txt = next(m["content"] for m in msgs if m["role"] == "system")
+    assert "1–2" in sys_txt or "1-2" in sys_txt
+    assert "Always address the user as sir" in sys_txt
+
+
+def test_gui_source_local_cpu_caption_and_warm_load():
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[1] / "assistant" / "ui" / "gui.py"
+    text = src.read_text(encoding="utf-8")
+    assert "Thinking (local CPU)" in text
+    assert "_thinking_caption" in text
+    assert "warm_load_async" in text
+    assert "root.after(500" in text

@@ -134,13 +134,11 @@ def try_builtin(text: str, *, open_app: Callable[[str], str] | None = None) -> s
 def _chat_messages(text: str, history: list[tuple[str, str]] | None) -> list[dict[str, str]]:
     _seed_address_from_env()
     system = (
-        "You are Jarvis, a concise helpful desktop assistant for a UK user. "
-        "Keep replies short (1–3 sentences). Do not claim you executed PC actions "
-        "unless the user message says an action already ran."
+        "You are Jarvis. Reply in 1–2 short sentences. "
+        "Do not claim you executed PC actions unless the user message says an action already ran."
     )
-    address = get_address_as()
-    if address:
-        system += f" Always address the user as {address}."
+    address = get_address_as() or "sir"
+    system += f" Always address the user as {address}."
     messages = [{"role": "system", "content": system}]
     for role, content in (history or [])[-6:]:
         messages.append({"role": role, "content": content})
@@ -240,7 +238,7 @@ def _try_bundled_local(messages: list[dict[str, str]]) -> str | None:
         )
 
     try:
-        return lm.generate(messages, max_tokens=256, temperature=0.6)
+        return lm.generate(messages)
     except Exception as e:  # noqa: BLE001
         err = str(e)[:160]
         return (

@@ -25,9 +25,9 @@ If Python is missing, the bat stops with plain English steps (install from pytho
 2. Wait for the status chip to move from `chat:downloading` → `chat:local` (or type a free-form question — Jarvis starts the download and replies “Downloading brain… try again in a minute.”)
 3. Type `hello` or `call me sir` — builtins always work; free-form chat uses the local model once ready.
 
-**No Ollama. First chat may download ~1.04 GB once.**
+**No Ollama. First chat may download ~1.04 GB once.** First reply after launch can take **30–90s on CPU** (loading the GGUF into RAM); later replies are faster. For speed, keep answers short (Jarvis is prompted for 1–2 sentences).
 
-Optional: set `OPENAI_API_KEY` for cloud fallback, or `JARVIS_LOCAL_LLM=1` only if you *want* Ollama. Set `JARVIS_DISABLE_LOCAL_LLM=1` to skip the bundled brain. Overrides: `JARVIS_MODEL_URL`, `JARVIS_MODEL_FILE`.
+Optional: set `OPENAI_API_KEY` for cloud fallback, or `JARVIS_LOCAL_LLM=1` only if you *want* Ollama. Set `JARVIS_DISABLE_LOCAL_LLM=1` to skip the bundled brain. Overrides: `JARVIS_MODEL_URL`, `JARVIS_MODEL_FILE` (point at a smaller ~0.5B Q4 GGUF later if you want a tinier, quicker brain), `JARVIS_MODEL_MAX_TOKENS`, `JARVIS_N_THREADS`.
 
 Your saved lessons live in `%USERPROFILE%\.jarvis\` so they survive updates.
 

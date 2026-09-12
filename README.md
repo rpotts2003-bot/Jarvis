@@ -14,7 +14,7 @@ On Windows (ZIP download):
 
 1. Unzip the folder.
 2. **Double-click `Start Jarvis.bat`.**
-3. First run creates `.venv`, installs core + voice packages, tries to install `llama-cpp-python` (CPU), copies `.env.example` → `.env` if needed, then opens the HUD.
+3. First run creates `.venv`, installs core + voice packages, installs `llama-cpp-python` from a **prebuilt CPU wheel** (`--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu`, `--only-binary` first so it does not compile from source), copies `.env.example` → `.env` if needed, then opens the HUD.
 4. Later runs skip reinstall unless packages are missing.
 
 If Python is missing, the bat stops with plain English steps (install from python.org with **Add to PATH** and **tcl/tk**). Mic problems only warn — the window still opens and **typing works**. If `llama-cpp-python` fails to install, the bat prints a clear message; builtins still work.

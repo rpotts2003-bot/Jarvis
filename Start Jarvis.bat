@@ -1,5 +1,5 @@
 @echo off
-setlocal EnableExtensions
+setlocal EnableExtensions EnableDelayedExpansion
 title Jarvis
 cd /d "%~dp0"
 
@@ -65,16 +65,24 @@ if "%NEED_INSTALL%"=="1" (
   echo Packages ready.
 )
 
-REM Bundled local LLM (llama-cpp-python). May fail on some PCs — chat still works offline for builtins.
+REM Bundled local LLM (llama-cpp-python). Prefer prebuilt CPU wheel — never silent source build first.
 if not exist .venv\.jarvis_local_llm_ok (
   echo Installing local brain runtime ^(llama-cpp-python, CPU^)...
-  pip install -r requirements-local.txt
-  if errorlevel 1 (
+  echo Using prebuilt CPU wheel...
+  set "LLAMA_OK=0"
+  pip install "llama-cpp-python" --only-binary=:all: --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+  if not errorlevel 1 set "LLAMA_OK=1"
+  if "!LLAMA_OK!"=="0" (
+    echo Prebuilt-only install failed. Retrying once with extra-index-url ^(still prefers wheel^)...
+    pip install "llama-cpp-python" --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+    if not errorlevel 1 set "LLAMA_OK=1"
+  )
+  if "!LLAMA_OK!"=="0" (
     echo.
     echo Could not install llama-cpp-python on this PC.
     echo Free-form chat needs that package OR an optional cloud key.
     echo Built-ins ^(hi / help / time^) still work. Typing still works.
-    echo Try: pip install llama-cpp-python
+    echo Try: pip install "llama-cpp-python" --only-binary=:all: --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
     echo Or set JARVIS_DISABLE_LOCAL_LLM=1 in .env to silence download attempts.
     echo.
   ) else (

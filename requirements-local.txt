@@ -1,3 +1,5 @@
 # Bundled GGUF inference (CPU wheel preferred on Windows).
+# Prefer prebuilt CPU wheel:
+#   pip install llama-cpp-python --only-binary=:all: --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
 # Start Jarvis.bat installs this separately and shows plain English if it fails.
 llama-cpp-python>=0.2.90

@@ -65,6 +65,8 @@ class JarvisWindow:
         self._demo_job: str | None = None
         self._mic_muted = False
         self._speak_gen = 0
+        self._submit_busy = False
+        self._submit_gen = 0
         self._armed_caption = (
             'Say "Jarvis …" or tap Listen'
             if self.hear is not None
@@ -350,16 +352,26 @@ class JarvisWindow:
                 "Voice deps missing / run Start Jarvis.bat again — typing still works",
             )
             return
+        if self._submit_busy:
+            self.set_state(VoiceState.THINKING, "Still thinking — wait a moment…")
+            return
 
         if self.wake is not None:
             self.wake.set_busy(True)
-        self.set_state(VoiceState.LISTENING, "Speak now…", level=0.35)
+        self.set_state(VoiceState.LISTENING, "Speak now… level 0%", level=0.35)
         self.state_label.configure(text="listen")
 
-        # Live VU while recording (orb level)
+        # Live VU + caption peak % while recording
         def _vu(level: float) -> None:
-            def apply(lv: float = level) -> None:
+            pct = int(max(0, min(100, round(float(level) * 100))))
+
+            def apply(lv: float = level, p: int = pct) -> None:
                 self.rings.set_level(lv)
+                if self.state == VoiceState.LISTENING:
+                    self.caption.configure(
+                        text=f"Speak now… level {p}%",
+                        fg="#b0bec5",
+                    )
                 self._draw()
 
             try:
@@ -394,43 +406,53 @@ class JarvisWindow:
                 if self.wake is not None and not text:
                     self.wake.set_busy(False)
                 if text and text.strip():
-                    # Same speak path as typing after transcript
+                    # Same speak path as typing after transcript (off Tk thread)
                     self._handle_voice_command(text.strip())
                     return
                 peak = float(getattr(self.hear, "last_peak", 0.0) or 0.0)
-                peak_hint = f" (mic peak {peak:.3f})" if peak > 0 else ""
+                peak_pct = int(max(0, min(100, round(peak * 100))))
+                peak_hint = f" (level {peak_pct}%)" if peak > 0 else ""
                 if err_kind == "network":
-                    msg = "Need internet for speech recognition — check connection, then tap Listen."
+                    msg = (
+                        "Heard audio but couldn’t transcribe "
+                        "(need internet for Google STT, or try again louder)"
+                        + peak_hint
+                    )
                     st = VoiceState.ERROR
                 elif err_kind == "stt":
-                    msg = "Speech recognition failed — try again, or type below."
+                    msg = (
+                        "Heard audio but couldn’t transcribe — try again, or type below."
+                        + peak_hint
+                    )
                     st = VoiceState.ERROR
                 elif err_kind == "denied":
                     msg = "Microphone denied — enable mic privacy, then try Listen again."
                     st = VoiceState.ERROR
-                elif err_kind == "mic":
+                elif err_kind == "mic" or peak < 1e-4:
                     msg = (
-                        "Didn't catch that (mic level flat — check Mute / Windows mic)"
+                        "Mic level flat — pick default mic in Windows Sound settings "
+                        "/ unmute / allow privacy"
                         + peak_hint
                     )
                     st = VoiceState.ERROR
                 else:
-                    # unknown / Google heard nothing useful
-                    if peak < 1e-4:
+                    # Peak OK but STT empty / unknown
+                    if peak >= 1e-4:
                         msg = (
-                            "Didn't catch that (mic level flat — check Mute / Windows mic)"
+                            "Heard audio but couldn’t transcribe "
+                            "(need internet for Google STT, or try again louder)"
                             + peak_hint
                         )
                     else:
                         msg = (
-                            "Didn't catch that — tap Listen and speak clearly"
-                            + peak_hint
+                            "Mic level flat — pick default mic in Windows Sound settings "
+                            "/ unmute / allow privacy"
                         )
                     st = VoiceState.IDLE
                 self.set_state(st, msg)
                 self.state_label.configure(text="idle" if st == VoiceState.IDLE else "error")
                 self.root.after(
-                    2800,
+                    3200,
                     lambda: self.set_state(VoiceState.IDLE, self._armed_idle_caption()),
                 )
 
@@ -523,68 +545,157 @@ class JarvisWindow:
         self.root.after(100, self._poll_commands)
 
     def _handle_voice_command(self, cmd: str) -> None:
-        if self.wake is not None:
+        """Run on_submit off the Tk thread (same as typed _send)."""
+        self._submit_async(cmd, caption=f"You: {cmd}", from_voice=True)
+
+    def _submit_async(
+        self,
+        text: str,
+        *,
+        caption: str = "Thinking…",
+        from_voice: bool = False,
+    ) -> None:
+        """Call on_submit on a background thread so Ollama never freezes the HUD."""
+        if self._submit_busy:
+            self.set_state(VoiceState.THINKING, "Still thinking — wait a moment…")
+            return
+        self._submit_busy = True
+        self._submit_gen += 1
+        gen = self._submit_gen
+        if from_voice and self.wake is not None:
             self.wake.set_busy(True)
-        self.set_state(VoiceState.THINKING, f"You: {cmd}")
-        self.root.update_idletasks()
-        try:
-            reply = self.on_submit(cmd)
-        except Exception as e:  # noqa: BLE001
-            self.set_state(VoiceState.ERROR, f"Error: {e}")
+        self._cancel_demo()
+        self.set_state(VoiceState.THINKING, caption)
+        self.state_label.configure(text="thinking")
+
+        # Hard ceiling so Thinking can never stick forever even if a call hangs
+        watchdog_ms = 50_000
+
+        def watchdog() -> None:
+            if gen != self._submit_gen or not self._submit_busy:
+                return
+            if self.state != VoiceState.THINKING:
+                return
+            self._submit_busy = False
             if self.wake is not None:
                 self.wake.set_busy(False)
-            return
+            self.set_state(
+                VoiceState.ERROR,
+                "Chat timed out — is Ollama running? Try again, or ask for help / time.",
+            )
+            self.root.after(
+                2800,
+                lambda: self.set_state(VoiceState.IDLE, self._armed_idle_caption()),
+            )
 
-        def after_speak() -> None:
-            if self.wake is not None:
-                self.wake.set_busy(False)
-            if not self._mic_muted:
-                self.state_label.configure(text="idle · wake armed")
-
-        # Speak once on background thread; clear busy after TTS finishes
-        reply_s = (reply or "").strip()
-        if not reply_s:
-            self.set_state(VoiceState.IDLE, self._armed_idle_caption())
-            after_speak()
-            return
-
-        self._speak_gen += 1
-        gen = self._speak_gen
-        self.set_state(VoiceState.SPEAKING, reply_s, level=0.55)
-
-        if self._speak_muted or not self.speak:
-            self.set_state(VoiceState.IDLE, reply_s)
-            after_speak()
-            return
+        self.root.after(watchdog_ms, watchdog)
 
         def worker() -> None:
-            err: str | None = None
+            reply: str | None = None
+            err: BaseException | None = None
             try:
-                self.speak(reply_s)
-            except Exception as e:  # noqa: BLE001
-                err = str(e) or e.__class__.__name__
+                reply = self.on_submit(text)
+            except BaseException as e:  # noqa: BLE001
+                err = e
 
-            def done() -> None:
-                if gen != self._speak_gen:
+            def finish() -> None:
+                if gen != self._submit_gen:
                     return
-                after_speak()
-                if err:
-                    self.set_state(VoiceState.ERROR, f"TTS error: {err[:120]}")
+                self._submit_busy = False
+
+                def after_speak() -> None:
+                    if self.wake is not None:
+                        self.wake.set_busy(False)
+                    if not self._mic_muted:
+                        self.state_label.configure(text="idle · wake armed")
+
+                if err is not None:
+                    msg = str(err) or err.__class__.__name__
+                    low = msg.lower()
+                    if "timed out" in low or "timeout" in low:
+                        detail = (
+                            "Ollama timed out — is it running? "
+                            "Try ollama run llama3.2 in a terminal."
+                        )
+                    else:
+                        detail = f"Chat error: {msg[:160]}"
+                    self.set_state(VoiceState.ERROR, detail)
+                    if self.wake is not None:
+                        self.wake.set_busy(False)
                     self.root.after(
-                        2500,
+                        2800,
                         lambda: self.set_state(
                             VoiceState.IDLE, self._armed_idle_caption()
                         ),
                     )
-                else:
+                    return
+
+                reply_s = (reply or "").strip()
+                if not reply_s:
                     self.set_state(VoiceState.IDLE, self._armed_idle_caption())
+                    after_speak()
+                    return
+
+                self.root.after(200, lambda: self.rings.set_level(0.8))
+                self.root.after(450, lambda: self.rings.set_level(0.35))
+
+                if from_voice:
+                    # Mirror previous voice path: speak then clear wake busy
+                    self._speak_gen += 1
+                    sgen = self._speak_gen
+                    self.set_state(VoiceState.SPEAKING, reply_s, level=0.55)
+                    if self._speak_muted or not self.speak:
+                        self.set_state(VoiceState.IDLE, reply_s)
+                        after_speak()
+                        return
+
+                    def tts_worker() -> None:
+                        tts_err: str | None = None
+                        try:
+                            self.speak(reply_s)
+                        except Exception as e:  # noqa: BLE001
+                            tts_err = str(e) or e.__class__.__name__
+
+                        def done() -> None:
+                            if sgen != self._speak_gen:
+                                return
+                            after_speak()
+                            if tts_err:
+                                self.set_state(
+                                    VoiceState.ERROR, f"TTS error: {tts_err[:120]}"
+                                )
+                                self.root.after(
+                                    2500,
+                                    lambda: self.set_state(
+                                        VoiceState.IDLE, self._armed_idle_caption()
+                                    ),
+                                )
+                            else:
+                                self.set_state(
+                                    VoiceState.IDLE, self._armed_idle_caption()
+                                )
+
+                        try:
+                            self.root.after(0, done)
+                        except Exception:
+                            pass
+
+                    threading.Thread(
+                        target=tts_worker, name="jarvis-tts", daemon=True
+                    ).start()
+                else:
+                    if self.wake is not None:
+                        self.wake.set_busy(False)
+                    self._speak_async(
+                        reply_s, idle_detail=self._armed_idle_caption()
+                    )
 
             try:
-                self.root.after(0, done)
+                self.root.after(0, finish)
             except Exception:
                 pass
 
-        threading.Thread(target=worker, name="jarvis-tts", daemon=True).start()
+        threading.Thread(target=worker, name="jarvis-submit", daemon=True).start()
 
     def _on_close(self) -> None:
         if self.wake is not None:
@@ -624,21 +735,8 @@ class JarvisWindow:
         if not text:
             return
         self.entry.delete(0, tk.END)
-        self._cancel_demo()
-        self.set_state(VoiceState.THINKING, "Thinking…")
-        self.root.update_idletasks()
-        try:
-            reply = self.on_submit(text)
-        except Exception as e:  # noqa: BLE001
-            self.set_state(VoiceState.ERROR, f"Error: {e}")
-            self.root.after(
-                1200, lambda: self.set_state(VoiceState.IDLE, self._armed_idle_caption())
-            )
-            return
-        self.root.after(200, lambda: self.rings.set_level(0.8))
-        self.root.after(450, lambda: self.rings.set_level(0.35))
-        # Typed replies: single speak path on background thread (mic mute does not skip)
-        self._speak_async(reply or "", idle_detail=self._armed_idle_caption())
+        # Typed submit on background thread — never block Tk with Ollama
+        self._submit_async(text, caption="Thinking…", from_voice=False)
 
     def _tick(self) -> None:
         drive = self.rings.tick()

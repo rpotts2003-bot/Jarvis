@@ -16,6 +16,7 @@ except Exception:  # noqa: BLE001
 
 # Local chat must never hang the HUD forever (GUI runs this off the Tk thread).
 _OLLAMA_TIMEOUT_S = 45.0
+_BUNDLED_TIMEOUT_S = 45.0
 _CLOUD_TIMEOUT_S = 30.0
 
 _ADDRESS_RE = re.compile(
@@ -215,11 +216,43 @@ def _format_local_chat_error(exc: BaseException, *, model: str) -> str:
     )
 
 
+def _try_bundled_local(messages: list[dict[str, str]]) -> str | None:
+    """Prefer Jarvis-managed GGUF. Returns reply, a short status string, or None to fall through."""
+    from assistant.llm import local_model as lm
+
+    if lm.local_llm_disabled():
+        return None
+
+    state = lm.ensure_model_async()
+    if state == "downloading" or (not lm.model_ready() and lm.download_in_progress()):
+        return "Downloading brain… try again in a minute."
+    if not lm.model_ready():
+        # Download just kicked off or failed to start
+        if state == "downloading":
+            return "Downloading brain… try again in a minute."
+        return None
+
+    if not lm.llama_cpp_available():
+        return (
+            "Brain file is ready, but llama-cpp-python is not installed. "
+            "Re-run Start Jarvis.bat (it tries to install the CPU wheel), "
+            "or ask for help / time / date."
+        )
+
+    try:
+        return lm.generate(messages, max_tokens=256, temperature=0.6)
+    except Exception as e:  # noqa: BLE001
+        err = str(e)[:160]
+        return (
+            f"Bundled chat failed ({err}). "
+            "Built-ins like help / time / date still work."
+        )
+
+
 def chat_reply(text: str, *, history: list[tuple[str, str]] | None = None) -> str:
-    """Free-form chat: local Ollama first, optional cloud key, else offline tip."""
+    """Free-form chat: bundled GGUF → optional Ollama (explicit) → optional cloud → tip."""
     from assistant.envload import (
         cloud_chat_enabled,
-        local_llm_active,
         local_model_name,
         ollama_reachable,
         openai_compatible_base,
@@ -229,22 +262,23 @@ def chat_reply(text: str, *, history: list[tuple[str, str]] | None = None) -> st
     messages = _chat_messages(text, history)
     model = local_model_name()
 
-    # 1) Local Ollama (no cloud key required)
-    want_local = local_llm_active(probe=True) or prefer_local_llm()
-    if want_local:
-        # Immediate fail if preferred local but daemon down — don't hang
-        if prefer_local_llm() and not ollama_reachable(timeout=0.8):
+    # 1) Bundled GGUF managed by Jarvis (preferred — no separate AI app)
+    bundled = _try_bundled_local(messages)
+    if bundled is not None:
+        return bundled
+
+    # 2) Ollama ONLY when JARVIS_LOCAL_LLM=1 explicitly (never auto)
+    if prefer_local_llm():
+        if not ollama_reachable(timeout=0.8):
             if not cloud_chat_enabled():
                 return (
                     "Ollama is not running (nothing on :11434). "
                     "Start Ollama, then: ollama pull llama3.2 — "
-                    "or ask for help / time / date."
+                    "or wait for Jarvis’s own brain download, or ask for help / time / date."
                 )
-            # Fall through to cloud if allowed
         else:
             try:
                 base = openai_compatible_base()
-                # Ollama accepts any/no bearer; send a dummy if unset
                 key = os.environ.get("OPENAI_API_KEY", "").strip() or "ollama"
                 return _post_chat_completions(
                     base=base,
@@ -254,18 +288,15 @@ def chat_reply(text: str, *, history: list[tuple[str, str]] | None = None) -> st
                     timeout=_OLLAMA_TIMEOUT_S,
                 )
             except Exception as e:  # noqa: BLE001
-                # If user forced local, don't silently fall through to cloud
-                if prefer_local_llm() and not cloud_chat_enabled():
+                if not cloud_chat_enabled():
                     return _format_local_chat_error(e, model=model)
-                # Auto path: try cloud next if configured
-                pass
 
-    # 2) Optional cloud OpenAI-compatible provider
+    # 3) Optional cloud OpenAI-compatible provider (key must be set)
     key = os.environ.get("OPENAI_API_KEY", "").strip()
     if cloud_chat_enabled() and key:
         try:
             base = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
-            # Don't retry the same dead Ollama URL as "cloud"
+            # Don't retry a dead Ollama URL as "cloud"
             if "11434" in base or "ollama" in base.lower():
                 base = "https://api.openai.com/v1"
                 cloud_model = "gpt-4o-mini"
@@ -282,19 +313,17 @@ def chat_reply(text: str, *, history: list[tuple[str, str]] | None = None) -> st
             err = str(e)
             if "429" in err or "Too Many Requests" in err:
                 return (
-                    "Chat hit a rate limit or billing cap (429). Check provider billing, "
-                    "or use local Ollama (JARVIS_LOCAL_LLM=1) — or ask for help / time / date."
+                    "Chat hit a rate limit or billing cap (429). Check provider billing — "
+                    "or wait for Jarvis’s bundled brain, or ask for help / time / date."
                 )
             return f"I couldn’t reach the chat service ({e}). Try again, or ask for help / time / date."
 
-    # 3) Offline tip (or local failed with cloud disabled already returned)
-    if prefer_local_llm():
-        return (
-            "Ollama chat unavailable. Start Ollama and run `ollama pull llama3.2`, "
-            "or ask for help / time / date."
-        )
+    # 4) Offline tip
+    from assistant.llm.local_model import DEFAULT_MODEL_SIZE_GB
+
     return (
-        "I understood you, but free-form chat needs a local model or a cloud key. "
-        "Install Ollama (https://ollama.com), run `ollama pull llama3.2`, set JARVIS_LOCAL_LLM=1 "
-        "in .env — or set OPENAI_API_KEY. Built-ins like time, date, help still work."
+        "I understood you, but free-form chat needs Jarvis’s brain file "
+        f"(~{DEFAULT_MODEL_SIZE_GB:.1f} GB, downloads on first chat) or an optional cloud key. "
+        "Built-ins like time, date, help still work. "
+        "Say hi / help / what time is it — or wait a minute if a download just started."
     )

@@ -1,0 +1,3 @@
+# Bundled GGUF inference (CPU wheel preferred on Windows).
+# Start Jarvis.bat installs this separately and shows plain English if it fails.
+llama-cpp-python>=0.2.90

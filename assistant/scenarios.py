@@ -28,6 +28,10 @@ def _orch(tmp: Path, roots: list[Path] | None = None) -> tuple[Orchestrator, lis
 
 
 def run_scenarios() -> bool:
+    import os
+
+    # Never pull a real GGUF during preflight/scenarios
+    os.environ["JARVIS_DISABLE_LOCAL_LLM"] = "1"
     results: list[tuple[str, bool, str]] = []
 
     def check(name: str, ok: bool, detail: str = "") -> None:

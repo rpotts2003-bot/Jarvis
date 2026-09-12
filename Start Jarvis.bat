@@ -65,9 +65,32 @@ if "%NEED_INSTALL%"=="1" (
   echo Packages ready.
 )
 
+REM Bundled local LLM (llama-cpp-python). May fail on some PCs — chat still works offline for builtins.
+if not exist .venv\.jarvis_local_llm_ok (
+  echo Installing local brain runtime ^(llama-cpp-python, CPU^)...
+  pip install -r requirements-local.txt
+  if errorlevel 1 (
+    echo.
+    echo Could not install llama-cpp-python on this PC.
+    echo Free-form chat needs that package OR an optional cloud key.
+    echo Built-ins ^(hi / help / time^) still work. Typing still works.
+    echo Try: pip install llama-cpp-python
+    echo Or set JARVIS_DISABLE_LOCAL_LLM=1 in .env to silence download attempts.
+    echo.
+  ) else (
+    python -c "import llama_cpp; print('llama-cpp ok')" >nul 2>&1
+    if errorlevel 1 (
+      echo llama-cpp-python imported poorly — free-form chat may be unavailable.
+    ) else (
+      echo ok> .venv\.jarvis_local_llm_ok
+      echo Local brain runtime ready.
+    )
+  )
+)
+
 if not exist .env if exist .env.example (
   copy /Y .env.example .env >nul
-  echo Created .env — add OPENAI_API_KEY there for free-form chat.
+  echo Created .env — first chat may download Jarvis's brain ^(~1 GB^) once.
 )
 
 echo Checking microphone ^(typing still works if this fails^)...
@@ -77,6 +100,7 @@ if errorlevel 1 (
 )
 
 echo Tip: neural UK male voice ^(Ryan^) needs internet; offline falls back to Windows SAPI.
+echo Tip: No Ollama required. First chat may download ~1 GB brain into %%USERPROFILE%%\.jarvis\models\
 echo Starting Jarvis window...
 python -m assistant gui
 if errorlevel 1 (

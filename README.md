@@ -2,7 +2,11 @@
 
 Local-first desktop assistant: push-to-talk ready state machine, teachable memory, allowlisted PC actions, and a listening orb (Idle / Listening / Thinking / Speaking).
 
-> Core intent + memory + actions run offline. Free-form chat prefers **local Ollama** (no cloud key). Voice uses Windows TTS + Google STT (online) via `sounddevice`; cloud chat keys are optional fallback only.
+> Core intent + memory + actions run offline. Free-form chat uses a **GGUF language-model file that Jarvis downloads and manages itself** under `%USERPROFILE%\.jarvis\models\` (no separate Ollama app, no required OpenAI/Grok key). Voice uses Windows TTS + Google STT (online) via `sounddevice`; cloud chat keys are optional only.
+
+## Honesty
+
+Jarvis does **not** train a GPT from scratch. On first use it downloads a small open instruct model (default **Qwen2.5-1.5B-Instruct Q4_K_M**, ~**1.04 GB**) and runs it locally with `llama-cpp-python`. That file is owned/managed by Jarvis in its own data folder — you do not install a separate AI app.
 
 ## Double-click Start Jarvis.bat. That's it.
 
@@ -10,18 +14,26 @@ On Windows (ZIP download):
 
 1. Unzip the folder.
 2. **Double-click `Start Jarvis.bat`.**
-3. First run creates `.venv`, installs core + voice packages, copies `.env.example` → `.env` if needed, then opens the HUD.
+3. First run creates `.venv`, installs core + voice packages, tries to install `llama-cpp-python` (CPU), copies `.env.example` → `.env` if needed, then opens the HUD.
 4. Later runs skip reinstall unless packages are missing.
 
-If Python is missing, the bat stops with plain English steps (install from python.org with **Add to PATH** and **tcl/tk**). Mic problems only warn — the window still opens and **typing works**.
+If Python is missing, the bat stops with plain English steps (install from python.org with **Add to PATH** and **tcl/tk**). Mic problems only warn — the window still opens and **typing works**. If `llama-cpp-python` fails to install, the bat prints a clear message; builtins still work.
 
-For free-form chat: install [Ollama](https://ollama.com), run `ollama pull llama3.2`, set `JARVIS_LOCAL_LLM=1` in `.env` (see `.env.example`). Cloud `OPENAI_API_KEY` is optional fallback only. Builtins / skills / PC actions need no LLM.
+### First chat (brain download)
+
+1. Start Jarvis.bat
+2. Wait for the status chip to move from `chat:downloading` → `chat:local` (or type a free-form question — Jarvis starts the download and replies “Downloading brain… try again in a minute.”)
+3. Type `hello` or `call me sir` — builtins always work; free-form chat uses the local model once ready.
+
+**No Ollama. First chat may download ~1.04 GB once.**
+
+Optional: set `OPENAI_API_KEY` for cloud fallback, or `JARVIS_LOCAL_LLM=1` only if you *want* Ollama. Set `JARVIS_DISABLE_LOCAL_LLM=1` to skip the bundled brain. Overrides: `JARVIS_MODEL_URL`, `JARVIS_MODEL_FILE`.
 
 Your saved lessons live in `%USERPROFILE%\.jarvis\` so they survive updates.
 
 ## Desktop window
 
-The HUD shows a procedural cyan arc-reactor orb on a dark grid, a one-line caption, and Mute / Listen / typed input. Built-ins work without teaching: `hi`, `help`, `what time is it`.
+The HUD shows a procedural cyan arc-reactor orb on a dark grid, a one-line caption, and Mute / Listen / typed input. Status chip: `chat:local` (brain ready), `chat:downloading`, or `chat:offline`. Built-ins work without teaching: `hi`, `help`, `what time is it`.
 
 ## Teach it
 
@@ -53,7 +65,7 @@ Say `diagnose` or `test mic`, or use **Test mic** on the HUD.
 
 ## Config
 
-See `config.yaml` and `ARCHITECTURE.md`. Copy `.env.example` to `.env` for Ollama / optional cloud (`JARVIS_CLOUD_CHAT=0` forces offline cloud fallback).
+See `config.yaml` and `ARCHITECTURE.md`. Copy `.env.example` to `.env` for model overrides / optional cloud (`JARVIS_CLOUD_CHAT=0` forces offline cloud fallback).
 
 ## Plex library import (local files only)
 

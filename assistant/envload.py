@@ -89,35 +89,78 @@ def ollama_reachable(timeout: float = 0.6) -> bool:
 
 
 def prefer_local_llm() -> bool:
-    """User forced local, or OPENAI_BASE_URL already targets Ollama."""
-    if _truthy(os.environ.get("JARVIS_LOCAL_LLM")):
-        return True
+    """True only when user explicitly set JARVIS_LOCAL_LLM=1 (Ollama path).
+
+    Bundled GGUF is separate — see bundled_local_* helpers. We do NOT auto-call
+    Ollama just because something is listening on :11434.
+    """
     if _falsy(os.environ.get("JARVIS_LOCAL_LLM")):
         return False
-    base = os.environ.get("OPENAI_BASE_URL", "").strip().lower()
-    return "11434" in base or "ollama" in base
+    return _truthy(os.environ.get("JARVIS_LOCAL_LLM"))
 
 
 def local_llm_active(*, probe: bool = True) -> bool:
-    """Use local Ollama for chat when forced/auto and (optionally) reachable."""
-    if _falsy(os.environ.get("JARVIS_LOCAL_LLM")):
+    """Use Ollama for chat only when JARVIS_LOCAL_LLM=1 and (optionally) reachable."""
+    if not prefer_local_llm():
         return False
-    if prefer_local_llm():
-        return (not probe) or ollama_reachable()
-    # Auto-detect: Ollama up → prefer local even without JARVIS_LOCAL_LLM
-    if probe:
-        return ollama_reachable()
-    return False
+    return (not probe) or ollama_reachable()
+
+
+def bundled_local_disabled() -> bool:
+    return _truthy(os.environ.get("JARVIS_DISABLE_LOCAL_LLM"))
+
+
+def bundled_local_ready() -> bool:
+    """True when Jarvis-managed GGUF is on disk and not disabled."""
+    if bundled_local_disabled():
+        return False
+    try:
+        from assistant.llm.local_model import model_ready
+
+        return model_ready()
+    except Exception:
+        return False
+
+
+def bundled_local_downloading() -> bool:
+    if bundled_local_disabled():
+        return False
+    try:
+        from assistant.llm.local_model import download_in_progress, model_ready
+
+        if model_ready():
+            return False
+        return download_in_progress()
+    except Exception:
+        return False
 
 
 def chat_backend_label(*, probe: bool = True) -> str:
-    """Short HUD status chip: chat:Ollama | chat:local | chat:Grok | chat:OpenAI | chat:offline."""
+    """HUD status chip: chat:local | chat:downloading | chat:Ollama | chat:Grok | chat:OpenAI | chat:offline."""
+    if bundled_local_disabled():
+        # Fall through to optional Ollama / cloud / offline
+        pass
+    else:
+        try:
+            from assistant.llm import local_model as lm
+
+            if lm.model_ready():
+                return "chat:local"
+            # Kick off download on first status probe so first launch starts early
+            state = lm.ensure_model_async()
+            if state == "downloading" or lm.download_in_progress():
+                return "chat:downloading"
+            if state == "ready":
+                return "chat:local"
+        except Exception:
+            pass
+
     if local_llm_active(probe=probe):
-        # Prefer Ollama label when hitting default/local Ollama URL
         root = ollama_base_url().lower()
         if "11434" in root or "ollama" in root:
             return "chat:Ollama"
         return "chat:local"
+
     if cloud_chat_enabled():
         base = os.environ.get("OPENAI_BASE_URL", "").lower()
         if "x.ai" in base:
@@ -127,6 +170,7 @@ def chat_backend_label(*, probe: bool = True) -> str:
 
 
 def cloud_chat_enabled() -> bool:
+    """Cloud only when a key is explicitly set (and not forced off)."""
     flag = os.environ.get("JARVIS_CLOUD_CHAT", "1").strip().lower()
     if flag in {"0", "false", "no", "off"}:
         return False

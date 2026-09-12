@@ -1,9 +1,10 @@
-"""Address preference + Ollama chat UX (no live Ollama)."""
+"""Address preference + chat UX (no live model download)."""
 
 from __future__ import annotations
 
 import assistant.envload as envload
 from assistant.llm import builtins
+from assistant.llm import local_model as lm
 from assistant.llm.builtins import (
     _format_local_chat_error,
     chat_reply,
@@ -63,6 +64,7 @@ def test_chat_messages_includes_address(tmp_path, monkeypatch):
 
 def test_ollama_timeout_is_45():
     assert builtins._OLLAMA_TIMEOUT_S <= 45.0
+    assert builtins._BUNDLED_TIMEOUT_S <= 45.0
 
 
 def test_format_model_missing():
@@ -78,12 +80,14 @@ def test_format_timeout():
 
 
 def test_chat_reply_immediate_when_ollama_down(monkeypatch):
+    monkeypatch.setenv("JARVIS_DISABLE_LOCAL_LLM", "1")
     monkeypatch.setenv("JARVIS_LOCAL_LLM", "1")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setattr(envload, "ollama_reachable", lambda timeout=0.6: False)
     monkeypatch.setattr(envload, "prefer_local_llm", lambda: True)
     monkeypatch.setattr(envload, "local_llm_active", lambda probe=True: False)
     monkeypatch.setattr(envload, "cloud_chat_enabled", lambda: False)
+    monkeypatch.setattr(lm, "local_llm_disabled", lambda: True)
     reply = chat_reply("tell me a joke")
     assert "Ollama" in reply or "ollama" in reply.lower()
     assert "not running" in reply.lower() or "unavailable" in reply.lower()

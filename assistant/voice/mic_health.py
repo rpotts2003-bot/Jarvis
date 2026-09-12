@@ -40,10 +40,17 @@ MESSAGES = {
 class MicProbeResult:
     status: MicStatus
     detail: str = ""
+    peak: float = 0.0
+    rms: float = 0.0
+    device_name: str = ""
+    sample_rate: int = 0
 
     @property
     def message(self) -> str:
-        return MESSAGES[self.status]
+        base = MESSAGES[self.status]
+        if self.peak > 0 or self.rms > 0:
+            return f"{base} (peak={self.peak:.4f}, rms={self.rms:.4f})"
+        return base
 
     @property
     def ok(self) -> bool:
@@ -115,11 +122,75 @@ def probe_microphone(*, open_stream: bool = True) -> MicProbeResult:
     if not open_stream:
         return MicProbeResult(MicStatus.OK, detail=f"{len(inputs)} input device(s)")
 
+    device_name = ""
+    sample_rate = 16000
     try:
-        # Short shared-mode capture (~0.2s)
-        sd.rec(frames=int(16000 * 0.2), samplerate=16000, channels=1, dtype="float32")
-        sd.wait()
-        return MicProbeResult(MicStatus.OK, detail=f"{len(inputs)} input device(s)")
+        try:
+            default = sd.query_devices(kind="input")
+            if isinstance(default, dict):
+                device_name = str(default.get("name") or "")
+                rate = int(float(default.get("default_samplerate") or 0))
+                if rate >= 8000:
+                    sample_rate = rate
+        except Exception:
+            pass
+
+        # Short shared-mode capture (~0.35s) on default device; measure peak/rms
+        duration = 0.35
+        frames = int(sample_rate * duration)
+        try:
+            audio = sd.rec(
+                frames=frames,
+                samplerate=sample_rate,
+                channels=1,
+                dtype="float32",
+            )
+            sd.wait()
+        except Exception:
+            # Retry at 16 kHz if native rate rejected
+            sample_rate = 16000
+            audio = sd.rec(
+                frames=int(sample_rate * duration),
+                samplerate=sample_rate,
+                channels=1,
+                dtype="float32",
+            )
+            sd.wait()
+
+        peak = 0.0
+        rms = 0.0
+        try:
+            import numpy as np  # type: ignore
+
+            flat = np.asarray(audio, dtype=np.float32).reshape(-1)
+            if flat.size:
+                peak = float(np.max(np.abs(flat)))
+                rms = float(np.sqrt(np.mean(flat * flat)))
+        except Exception:
+            try:
+                flat = list(audio.reshape(-1))  # type: ignore[union-attr]
+                if flat:
+                    peak = max(abs(float(x)) for x in flat)
+                    rms = (sum(float(x) * float(x) for x in flat) / len(flat)) ** 0.5
+            except Exception:
+                pass
+
+        detail = f"{len(inputs)} input device(s)"
+        if device_name:
+            detail += f"; default={device_name!r}"
+        detail += f"; rate={sample_rate}"
+        status = MicStatus.OK
+        # Flat peak often means OS mute / wrong device — still "ok" for open, but hint
+        if peak < 1e-5:
+            detail += "; peak flat (speak louder / unmute Windows mic)"
+        return MicProbeResult(
+            status,
+            detail=detail,
+            peak=peak,
+            rms=rms,
+            device_name=device_name,
+            sample_rate=sample_rate,
+        )
     except PermissionError as e:
         return MicProbeResult(MicStatus.PERMISSION, detail=str(e))
     except Exception as e:

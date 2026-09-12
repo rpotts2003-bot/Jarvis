@@ -2,7 +2,7 @@
 
 Local-first desktop assistant: push-to-talk ready state machine, teachable memory, allowlisted PC actions, and a listening orb (Idle / Listening / Thinking / Speaking).
 
-> Core intent + memory + actions run offline. Voice uses Windows TTS + Google STT (online) via `sounddevice`; optional OpenAI chat needs a key in `.env`.
+> Core intent + memory + actions run offline. Free-form chat prefers **local Ollama** (no cloud key). Voice uses Windows TTS + Google STT (online) via `sounddevice`; cloud chat keys are optional fallback only.
 
 ## Double-click Start Jarvis.bat. That's it.
 
@@ -15,13 +15,13 @@ On Windows (ZIP download):
 
 If Python is missing, the bat stops with plain English steps (install from python.org with **Add to PATH** and **tcl/tk**). Mic problems only warn — the window still opens and **typing works**.
 
-Optional: put `OPENAI_API_KEY=...` in `.env` for free-form chat (not required for builtins / skills / PC actions).
+For free-form chat: install [Ollama](https://ollama.com), run `ollama pull llama3.2`, set `JARVIS_LOCAL_LLM=1` in `.env` (see `.env.example`). Cloud `OPENAI_API_KEY` is optional fallback only. Builtins / skills / PC actions need no LLM.
 
 Your saved lessons live in `%USERPROFILE%\.jarvis\` so they survive updates.
 
 ## Desktop window
 
-The HUD shows a cyan orb on a dark grid, a one-line caption, and a text bar + Hold demo. Built-ins work without teaching: `hi`, `help`, `what time is it`.
+The HUD shows a procedural cyan arc-reactor orb on a dark grid, a one-line caption, and Mute / Listen / typed input. Built-ins work without teaching: `hi`, `help`, `what time is it`.
 
 ## Teach it
 
@@ -53,7 +53,7 @@ Say `diagnose` or `test mic`, or use **Test mic** on the HUD.
 
 ## Config
 
-See `config.yaml`. Copy `.env.example` to `.env` for optional OpenAI (`JARVIS_CLOUD_CHAT=0` forces offline chat).
+See `config.yaml` and `ARCHITECTURE.md`. Copy `.env.example` to `.env` for Ollama / optional cloud (`JARVIS_CLOUD_CHAT=0` forces offline cloud fallback).
 
 ## Plex library import (local files only)
 

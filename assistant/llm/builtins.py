@@ -59,54 +59,103 @@ def try_builtin(text: str, *, open_app: Callable[[str], str] | None = None) -> s
     return None
 
 
-def chat_reply(text: str, *, history: list[tuple[str, str]] | None = None) -> str:
-    """Free-form chat. Uses OpenAI-compatible API if OPENAI_API_KEY is set; else offline fallback."""
-    from assistant.envload import cloud_chat_enabled
-    key = os.environ.get("OPENAI_API_KEY", "").strip()
-    if not cloud_chat_enabled() or not key:
-        return (
-            "I understood you, but I need an API key for free-form chat. "
-            "Set OPENAI_API_KEY in your environment (or .env), or ask me something built-in "
-            "like time, date, help, or open calculator. You can also teach me shortcuts."
-        )
-    try:
-        import json
-        import urllib.request
+def _chat_messages(text: str, history: list[tuple[str, str]] | None) -> list[dict[str, str]]:
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are Jarvis, a concise helpful desktop assistant for a UK user. "
+                "Keep replies short (1–3 sentences). Do not claim you executed PC actions "
+                "unless the user message says an action already ran."
+            ),
+        }
+    ]
+    for role, content in (history or [])[-6:]:
+        messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": text})
+    return messages
 
-        base = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
-        model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are Jarvis, a concise helpful desktop assistant for a UK user. "
-                    "Keep replies short (1–3 sentences). Do not claim you executed PC actions "
-                    "unless the user message says an action already ran."
-                ),
-            }
-        ]
-        for role, content in (history or [])[-6:]:
-            messages.append({"role": role, "content": content})
-        messages.append({"role": "user", "content": text})
-        body = json.dumps({"model": model, "messages": messages, "temperature": 0.6}).encode()
-        req = urllib.request.Request(
-            f"{base}/chat/completions",
-            data=body,
-            headers={
-                "Authorization": f"Bearer {key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
-            data = json.loads(resp.read().decode())
-        return data["choices"][0]["message"]["content"].strip()
-    except Exception as e:  # noqa: BLE001
-        err = str(e)
-        # Soften common rate-limit / billing failures (e.g. HTTP 429)
-        if "429" in err or "Too Many Requests" in err:
-            return (
-                "Chat hit a rate limit or billing cap (429). Check provider billing, "
-                "or try Grok via OPENAI_BASE_URL=https://api.x.ai/v1 — or ask for help / time / date."
+
+def _post_chat_completions(
+    *,
+    base: str,
+    model: str,
+    messages: list[dict[str, str]],
+    api_key: str | None,
+    timeout: float = 60.0,
+) -> str:
+    import json
+    import urllib.request
+
+    body = json.dumps({"model": model, "messages": messages, "temperature": 0.6}).encode()
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    req = urllib.request.Request(
+        f"{base.rstrip('/')}/chat/completions",
+        data=body,
+        headers=headers,
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+        data = json.loads(resp.read().decode())
+    return data["choices"][0]["message"]["content"].strip()
+
+
+def chat_reply(text: str, *, history: list[tuple[str, str]] | None = None) -> str:
+    """Free-form chat: local Ollama first, optional cloud key, else offline tip."""
+    from assistant.envload import (
+        cloud_chat_enabled,
+        local_llm_active,
+        local_model_name,
+        openai_compatible_base,
+        prefer_local_llm,
+    )
+
+    messages = _chat_messages(text, history)
+
+    # 1) Local Ollama (no cloud key required)
+    if local_llm_active(probe=True) or prefer_local_llm():
+        try:
+            base = openai_compatible_base()
+            model = local_model_name()
+            # Ollama accepts any/no bearer; send a dummy if unset
+            key = os.environ.get("OPENAI_API_KEY", "").strip() or "ollama"
+            return _post_chat_completions(
+                base=base, model=model, messages=messages, api_key=key, timeout=120.0
             )
-        return f"I couldn’t reach the chat service ({e}). Try again, or ask for help / time / date."
+        except Exception as e:  # noqa: BLE001
+            # If user forced local, don't silently fall through to cloud
+            if prefer_local_llm() and not cloud_chat_enabled():
+                return (
+                    f"Local chat failed ({e}). Is Ollama running? "
+                    "Install from https://ollama.com then: ollama pull llama3.2 "
+                    "— or ask for help / time / date."
+                )
+            # Auto path: try cloud next if configured
+            pass
+
+    # 2) Optional cloud OpenAI-compatible provider
+    key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if cloud_chat_enabled() and key:
+        try:
+            base = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+            model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+            return _post_chat_completions(
+                base=base, model=model, messages=messages, api_key=key, timeout=30.0
+            )
+        except Exception as e:  # noqa: BLE001
+            err = str(e)
+            if "429" in err or "Too Many Requests" in err:
+                return (
+                    "Chat hit a rate limit or billing cap (429). Check provider billing, "
+                    "or use local Ollama (JARVIS_LOCAL_LLM=1) — or ask for help / time / date."
+                )
+            return f"I couldn’t reach the chat service ({e}). Try again, or ask for help / time / date."
+
+    # 3) Offline tip
+    return (
+        "I understood you, but free-form chat needs a local model or a cloud key. "
+        "Install Ollama (https://ollama.com), run `ollama pull llama3.2`, set JARVIS_LOCAL_LLM=1 "
+        "in .env — or set OPENAI_API_KEY. Built-ins like time, date, help still work."
+    )

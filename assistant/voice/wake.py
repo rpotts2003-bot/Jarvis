@@ -26,6 +26,10 @@ _DEFAULT_WAKE_VARIANTS = (
     "jarvis'",
     "jarvice",
     "jarvis,",
+    "jarvus",
+    "jarvish",
+    "jarviz",
+    "gervis",
 )
 
 _WAKE_PREFIXES = ("hey", "ok", "okay")

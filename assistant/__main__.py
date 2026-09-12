@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from assistant.actions.router import ActionRouter
-from assistant.envload import cloud_chat_enabled, load_env
+from assistant.envload import load_env
 from assistant.config import expand_roots, load_config, user_data_dir
 from assistant.core.orchestrator import Orchestrator
 from assistant.memory.store import MemoryStore
@@ -86,14 +86,9 @@ def gui_loop() -> None:
         turn = orch.handle_utterance(text)
         return turn.reply or ""
 
-    if cloud_chat_enabled():
-        base = os.environ.get("OPENAI_BASE_URL", "").lower()
-        if "x.ai" in base:
-            chat_label = "chat:Grok"
-        else:
-            chat_label = "chat:OpenAI"
-    else:
-        chat_label = "chat:offline"
+    from assistant.envload import chat_backend_label
+
+    chat_label = chat_backend_label(probe=True)
     status_bits = [chat_label]
     # Listen button: fixed ~5s (ptt). Wake loop: shorter fixed chunk. JARVIS_VAD=1 for energy gate.
     hear_ptt = make_mic_hear(mode="ptt")
@@ -161,6 +156,10 @@ def _run_diagnose() -> int:
         mark_probed(status=result.status.value)
         lines.append(f"mic: {result.status.value}")
         lines.append(result.message)
+        lines.append(
+            f"peak={getattr(result, 'peak', 0):.4f} rms={getattr(result, 'rms', 0):.4f} "
+            f"device={getattr(result, 'device_name', '')!r} rate={getattr(result, 'sample_rate', 0)}"
+        )
         try:
             tts = make_tts()
             tts.speak("")

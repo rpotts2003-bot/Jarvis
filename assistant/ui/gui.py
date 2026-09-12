@@ -208,10 +208,20 @@ class JarvisWindow:
         self.root.after(400, self._maybe_first_mic_probe)
 
     def _load_hud_image(self) -> None:
-        # Prefer circular composite on canvas BG (no black box). Else skip image.
+        # Procedural canvas arc-reactor is the default look.
+        # Opt-in legacy photo: JARVIS_HUD_PHOTO=1
         self._photo = None
         self._base_img = None
         self._hud_path = None
+        import os
+
+        if os.environ.get("JARVIS_HUD_PHOTO", "").strip().lower() not in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }:
+            return
         for name in ("hud_orb_tk.png", "hud_orb.png"):
             path = _asset(name)
             if path is None:
@@ -700,45 +710,87 @@ class JarvisWindow:
     def _draw_rings(
         self, c: tk.Canvas, cx: int, cy: int, base_r: float, drive: dict
     ) -> None:
+        """Procedural arc-reactor: layered cyan glow rings + rotating segments."""
         pulse = float(drive["pulse"])
         radius_mul = float(drive["radius_mul"])
         bright = float(drive["brightness"])
         shimmer = float(drive.get("shimmer", 0.0))
+        level = float(drive.get("level_smooth", 0.0) or 0.0)
         color = _hex_brightness(CYAN, 0.55 + 0.45 * bright)
+        hot = _hex_brightness(CYAN, 0.75 + 0.25 * bright)
         dim = _hex_brightness(CYAN_DIM, 0.7 + 0.3 * bright)
+        glow = _hex_brightness("#004d5c", 0.8 + 0.4 * bright)
 
         if drive.get("reduced_motion"):
             for mul in (1.55, 1.35, 1.18, 0.55, 0.35):
                 r = base_r * mul
                 c.create_oval(cx - r, cy - r, cx + r, cy + r, outline=dim, width=2)
+            core = base_r * 0.2
+            c.create_oval(
+                cx - core, cy - core, cx + core, cy + core, outline=color, width=2, fill="#062029"
+            )
             return
 
-        for i, mul in enumerate((1.55, 1.35, 1.18)):
-            r = base_r * mul * radius_mul * pulse
+        scale = radius_mul * pulse
+
+        # Soft outer glow discs (arc-reactor bloom)
+        for i, (mul, w) in enumerate(((1.72, 1), (1.58, 2), (1.45, 2))):
+            r = base_r * mul * scale
+            c.create_oval(
+                cx - r,
+                cy - r,
+                cx + r,
+                cy + r,
+                outline=glow if i else dim,
+                width=w,
+            )
+
+        # Main concentric rings
+        for i, mul in enumerate((1.32, 1.18, 1.05)):
+            r = base_r * mul * scale
             c.create_oval(
                 cx - r,
                 cy - r,
                 cx + r,
                 cy + r,
                 outline=color if i == 0 else dim,
-                width=2,
+                width=3 if i == 0 else 2,
             )
 
-        r_tick = base_r * 1.05 * radius_mul * pulse
-        for i in range(60):
-            ang = math.radians(i * 6 + self._t * float(drive["rot_speed"]) * 0.3)
+        # Tick marks (reactor teeth)
+        r_tick = base_r * 0.98 * scale
+        rot_ticks = self._t * float(drive["rot_speed"]) * 0.25
+        n_ticks = 48
+        for i in range(n_ticks):
+            ang = math.radians(i * (360 / n_ticks) + rot_ticks)
+            long = (i % 6 == 0)
+            inner = r_tick - (10 if long else 5)
             x0 = cx + r_tick * math.cos(ang)
             y0 = cy + r_tick * math.sin(ang)
-            x1 = cx + (r_tick - 6) * math.cos(ang)
-            y1 = cy + (r_tick - 6) * math.sin(ang)
-            c.create_line(x0, y0, x1, y1, fill=dim)
+            x1 = cx + inner * math.cos(ang)
+            y1 = cy + inner * math.sin(ang)
+            c.create_line(x0, y0, x1, y1, fill=hot if long else dim, width=2 if long else 1)
 
+        # Counter-rotating arc segments
         rot = self._t * float(drive["rot_speed"])
-        r_seg = base_r * 1.25 * radius_mul * pulse
-        # Thinking: arcs driven by shimmer, not VU
+        rot2 = -self._t * float(drive["rot_speed"]) * 0.65
+        r_seg = base_r * 1.22 * scale
         if self.state == VoiceState.THINKING:
-            r_seg *= 0.98 + 0.04 * shimmer
-        for start, extent in ((rot, 40), (rot + 90, 55), (rot + 200, 35), (rot + 280, 50)):
+            r_seg *= 0.98 + 0.05 * shimmer
+        elif self.state == VoiceState.LISTENING:
+            r_seg *= 1.0 + 0.06 * level
+        elif self.state == VoiceState.SPEAKING:
+            r_seg *= 1.0 + 0.1 * level
+
+        arcs = (
+            (rot, 48, 7, hot),
+            (rot + 110, 36, 5, color),
+            (rot + 210, 55, 6, hot),
+            (rot + 300, 28, 4, color),
+            (rot2, 40, 3, dim),
+            (rot2 + 180, 50, 3, dim),
+        )
+        for start, extent, width, col in arcs:
             c.create_arc(
                 cx - r_seg,
                 cy - r_seg,
@@ -747,16 +799,40 @@ class JarvisWindow:
                 start=start,
                 extent=extent,
                 style=tk.ARC,
-                outline=color,
-                width=6,
+                outline=col,
+                width=width,
             )
 
-        for mul in (0.55, 0.35):
-            r = base_r * mul
-            c.create_oval(cx - r, cy - r, cx + r, cy + r, outline=color, width=2)
+        # Inner reactor rings + core
+        for mul, w in ((0.62, 2), (0.45, 2), (0.28, 3)):
+            r = base_r * mul * (0.96 + 0.04 * pulse)
+            c.create_oval(cx - r, cy - r, cx + r, cy + r, outline=color, width=w)
 
-        core = base_r * 0.18
-        c.create_oval(cx - core, cy - core, cx + core, cy + core, outline=dim, width=1)
+        # Pulsing core fill (state-aware)
+        core = base_r * (0.16 + 0.04 * pulse + 0.03 * level)
+        core_fill = "#0a3040" if self.state == VoiceState.IDLE else "#0c4a5c"
+        if self.state == VoiceState.ERROR:
+            core_fill = "#3a1520"
+        c.create_oval(
+            cx - core,
+            cy - core,
+            cx + core,
+            cy + core,
+            outline=hot,
+            width=2,
+            fill=core_fill,
+        )
+        # Tiny inner spark
+        spark = core * 0.35
+        c.create_oval(
+            cx - spark,
+            cy - spark,
+            cx + spark,
+            cy + spark,
+            outline=CYAN,
+            width=1,
+            fill=_hex_brightness(CYAN, 0.35 + 0.4 * bright),
+        )
 
     def run(self) -> None:
         self.root.mainloop()

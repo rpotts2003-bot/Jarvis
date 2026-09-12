@@ -4,9 +4,14 @@ from __future__ import annotations
 
 import os
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from assistant.config import app_root, user_data_dir
+
+_DEFAULT_OLLAMA = "http://127.0.0.1:11434"
+_DEFAULT_LOCAL_MODEL = "llama3.2"
 
 
 def _parse_env_file(path: Path) -> None:
@@ -29,6 +34,96 @@ def load_env() -> None:
         _parse_env_file(Path(sys.executable).resolve().parent / ".env")
     _parse_env_file(app_root() / ".env")
     _parse_env_file(user_data_dir() / ".env")
+
+
+def _truthy(val: str | None) -> bool:
+    return (val or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _falsy(val: str | None) -> bool:
+    return (val or "").strip().lower() in {"0", "false", "no", "off"}
+
+
+def ollama_base_url() -> str:
+    """Return Ollama root (no /v1). Honours OPENAI_BASE_URL when it points at Ollama."""
+    explicit = os.environ.get("JARVIS_OLLAMA_URL", "").strip().rstrip("/")
+    if explicit:
+        return explicit.replace("/v1", "") if explicit.endswith("/v1") else explicit
+    base = os.environ.get("OPENAI_BASE_URL", "").strip().rstrip("/")
+    if base and ("11434" in base or "ollama" in base.lower()):
+        return base[:-3] if base.endswith("/v1") else base
+    return _DEFAULT_OLLAMA
+
+
+def openai_compatible_base(ollama_root: str | None = None) -> str:
+    root = (ollama_root or ollama_base_url()).rstrip("/")
+    return root if root.endswith("/v1") else f"{root}/v1"
+
+
+def local_model_name() -> str:
+    return (
+        os.environ.get("JARVIS_LOCAL_MODEL", "").strip()
+        or os.environ.get("OPENAI_MODEL", "").strip()
+        or _DEFAULT_LOCAL_MODEL
+    )
+
+
+def ollama_reachable(timeout: float = 0.6) -> bool:
+    """True if Ollama responds on /api/tags (or OpenAI-compatible models)."""
+    root = ollama_base_url()
+    for path in ("/api/tags", "/v1/models"):
+        try:
+            req = urllib.request.Request(
+                f"{root}{path}",
+                method="GET",
+                headers={"Accept": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+                if 200 <= getattr(resp, "status", 200) < 300:
+                    return True
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+            continue
+        except Exception:
+            continue
+    return False
+
+
+def prefer_local_llm() -> bool:
+    """User forced local, or OPENAI_BASE_URL already targets Ollama."""
+    if _truthy(os.environ.get("JARVIS_LOCAL_LLM")):
+        return True
+    if _falsy(os.environ.get("JARVIS_LOCAL_LLM")):
+        return False
+    base = os.environ.get("OPENAI_BASE_URL", "").strip().lower()
+    return "11434" in base or "ollama" in base
+
+
+def local_llm_active(*, probe: bool = True) -> bool:
+    """Use local Ollama for chat when forced/auto and (optionally) reachable."""
+    if _falsy(os.environ.get("JARVIS_LOCAL_LLM")):
+        return False
+    if prefer_local_llm():
+        return (not probe) or ollama_reachable()
+    # Auto-detect: Ollama up → prefer local even without JARVIS_LOCAL_LLM
+    if probe:
+        return ollama_reachable()
+    return False
+
+
+def chat_backend_label(*, probe: bool = True) -> str:
+    """Short HUD status chip: chat:Ollama | chat:local | chat:Grok | chat:OpenAI | chat:offline."""
+    if local_llm_active(probe=probe):
+        # Prefer Ollama label when hitting default/local Ollama URL
+        root = ollama_base_url().lower()
+        if "11434" in root or "ollama" in root:
+            return "chat:Ollama"
+        return "chat:local"
+    if cloud_chat_enabled():
+        base = os.environ.get("OPENAI_BASE_URL", "").lower()
+        if "x.ai" in base:
+            return "chat:Grok"
+        return "chat:OpenAI"
+    return "chat:offline"
 
 
 def cloud_chat_enabled() -> bool:
